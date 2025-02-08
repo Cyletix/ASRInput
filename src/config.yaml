@@ -1,0 +1,5 @@
+model_name: large
+language: zh
+device: cuda  # 或 "cpu"
+buffer_seconds: 8
+step_seconds: 2

@@ -83,9 +83,11 @@ if __name__ == "__main__":
     paths = [
         "src/main.py",  # 单个文件
         "src/worker_thread.py",
-        # "src/asr_core.py",
+        "src/asr_core.py",
         "src/window.py",
+        "src/config.yaml",
+        # "src/config.py",
 
     ]
 
-    main(paths, file_extension="*.py", output_md="tests/output.md")
+    main(paths, output_md="tests/output.md")

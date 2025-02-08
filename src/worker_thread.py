@@ -1,22 +1,25 @@
 # worker_thread.py
+import os
+os.environ["FUNASR_DISABLE_UPDATE"] = "1"  # 禁用更新检查
+
 import time as _time
 import numpy as np
 from PyQt6.QtCore import QThread, pyqtSignal
 import pyaudio
 from asr_core import asr_transcribe
 from funasr import AutoModel
-import os
 import wave
+import re
 import logging
 
-# 降低 funasr 日志输出级别，减少无关提示
 logging.getLogger("modelscope").setLevel(logging.ERROR)
 
 class ASRWorkerThread(QThread):
-    # result_ready 信号传递：识别文本和对应音频ID
+    # 通过 result_ready 信号传递：识别文本和对应音频ID
     result_ready = pyqtSignal(str, str)
 
-    def __init__(self, sample_rate=16000, chunk=2048, buffer_seconds=8, device="cpu", config=None, parent=None):
+    def __init__(self, sample_rate=16000, chunk=2048, buffer_seconds=8,
+                 device="cpu", config=None, parent=None):
         super().__init__(parent)
         self.sample_rate = sample_rate
         self.chunk = chunk
@@ -25,24 +28,23 @@ class ASRWorkerThread(QThread):
         self.running = True
         self.config = config
 
-        # 缓存识别成功但未反馈的音频数据，字典：audio_id -> numpy array
+        # 保存识别成功但尚未反馈的音频数据： audio_id -> numpy array
         self.recognized_audio = {}
-
-        # 设置最大缓存条数，默认20（可在配置中调整）
         self.max_cache_count = self.config.get("max_cache_count", 20) if self.config else 20
+        self.cache_clear_interval = self.config.get("cache_clear_interval", 10) if self.config else 10
+        self.last_cache_clear_time = _time.time()
 
-        # 定义 VAD 参数，以256毫秒为处理窗口
+        # VAD 参数：以256毫秒为窗口
         self.vad_chunk_ms = 256
         self.vad_chunk_samples = int(self.sample_rate * self.vad_chunk_ms / 1000)
 
-        # 如果配置中定义了模型缓存路径，则设置为缓存目录
+        # 如果配置中指定了模型缓存路径，则设置该目录
         if self.config and self.config.get("model_cache_path"):
             cache_dir = self.config.get("model_cache_path")
             os.makedirs(cache_dir, exist_ok=True)
             os.environ["TRANSFORMERS_CACHE"] = cache_dir
 
-        # 移除更新检查，避免因更新卡顿或识别失败
-        # self.update_model_if_needed()  <-- 已删除
+        # 更新检查已禁用
 
         self.pa = pyaudio.PyAudio()
         self.stream = self.pa.open(format=pyaudio.paInt16,
@@ -50,7 +52,6 @@ class ASRWorkerThread(QThread):
                                    rate=self.sample_rate,
                                    input=True,
                                    frames_per_buffer=self.chunk)
-        # 增加 trust_remote_code 参数，避免远程加载报错
         self.model_vad = AutoModel(
             model="fsmn-vad",
             model_revision="v2.0.4",
@@ -86,7 +87,6 @@ class ASRWorkerThread(QThread):
                 current_chunk = audio_buffer[:self.vad_chunk_samples]
                 audio_buffer = audio_buffer[self.vad_chunk_samples:]
                 vad_buffer = np.concatenate((vad_buffer, current_chunk))
-
                 res = self.model_vad.generate(
                     input=current_chunk,
                     cache=self.cache_vad,
@@ -119,7 +119,6 @@ class ASRWorkerThread(QThread):
                                 audio_id = str(int(_time.time() * 1000))
                                 self.recognized_audio[audio_id] = segment_audio
                                 self.result_ready.emit(text, audio_id)
-                                # 如果缓存超过最大值，则删除最旧的条目
                                 if len(self.recognized_audio) > self.max_cache_count:
                                     oldest_key = next(iter(self.recognized_audio))
                                     del self.recognized_audio[oldest_key]
@@ -128,6 +127,41 @@ class ASRWorkerThread(QThread):
                         last_vad_beg = -1
                         last_vad_end = -1
                         silence_counter = 0
+
+            # 判断 vad_buffer 时长是否已达到阈值
+            if len(vad_buffer) / self.sample_rate >= self.buffer_seconds:
+                # 如果检测到了有效的分割点，则计算其在缓冲区中的位置（索引）
+                if last_vad_end > 0:
+                    forced_index = int((last_vad_end - offset) * self.sample_rate / 1000)
+                    # 防止计算出无效的索引
+                    if forced_index <= 0 or forced_index > len(vad_buffer):
+                        forced_index = len(vad_buffer)
+                else:
+                    forced_index = len(vad_buffer)
+                
+                segment_audio = vad_buffer[:forced_index]
+                try:
+                    text = asr_transcribe(segment_audio)
+                except Exception as e:
+                    text = f"识别错误: {e}"
+                if text and text.strip() and text != last_text:
+                    last_text = text
+                    audio_id = str(int(_time.time() * 1000))
+                    self.recognized_audio[audio_id] = segment_audio
+                    self.result_ready.emit(text, audio_id)
+                
+                # 将已经处理的音频从缓冲中剔除，并更新 offset（注意转换单位：samples 到毫秒）
+                vad_buffer = vad_buffer[forced_index:]
+                offset += (forced_index / self.sample_rate) * 1000
+                
+                # 重置分割相关变量，等待下一个有效分割
+                last_vad_beg = -1
+                last_vad_end = -1
+                silence_counter = 0
+
+            if _time.time() - self.last_cache_clear_time > self.cache_clear_interval:
+                self.recognized_audio.clear()
+                self.last_cache_clear_time = _time.time()
             _time.sleep(0.01)
 
     def stop(self):
@@ -151,6 +185,5 @@ class ASRWorkerThread(QThread):
         wf.setframerate(self.sample_rate)
         wf.writeframes(audio_int16.tobytes())
         wf.close()
-        # 保存反馈后，从缓存中删除对应数据
         self.recognized_audio.pop(audio_id, None)
         return filename

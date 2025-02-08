@@ -126,3 +126,4 @@ def asr_transcribe(input_wav: np.ndarray) -> str:
     # 调用格式化函数去掉前缀标记
     formatted_text = format_str_v3(raw_text)
     return formatted_text
+

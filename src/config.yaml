@@ -3,3 +3,7 @@ language: zh
 device: cuda  # 或 "cpu"
 buffer_seconds: 8
 step_seconds: 2
+remove_trailing_period: true
+trailing_punctuation: ""   # 留空表示删除
+punctuation_mode: "half"     # 或 "full"
+model_cache_path: "models"

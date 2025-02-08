@@ -12,19 +12,30 @@ class ASRWorkerThread(QThread):
     # result_ready 信号传递：识别文本和一个音频ID
     result_ready = pyqtSignal(str, str)
 
-    def __init__(self, sample_rate=16000, chunk=2048, buffer_seconds=8, device="cpu", parent=None):
+    def __init__(self, sample_rate=16000, chunk=2048, buffer_seconds=8, device="cpu", config=None, parent=None):
         super().__init__(parent)
         self.sample_rate = sample_rate
         self.chunk = chunk
         self.buffer_seconds = buffer_seconds
         self.device = device
         self.running = True
+        self.config = config
+
         # 缓存识别成功但未反馈的音频数据，字典：audio_id -> numpy array
         self.recognized_audio = {}
 
         # 定义 VAD 参数：以 256 毫秒为一个处理窗口
         self.vad_chunk_ms = 256
         self.vad_chunk_samples = int(self.sample_rate * self.vad_chunk_ms / 1000)
+
+        # 如果配置中定义了模型缓存路径，则将该路径作为缓存目录
+        if self.config and self.config.get("model_cache_path"):
+            cache_dir = self.config.get("model_cache_path")
+            os.makedirs(cache_dir, exist_ok=True)
+            os.environ["TRANSFORMERS_CACHE"] = cache_dir
+
+        # 检查模型更新（伪代码，可根据实际 API 扩展）
+        self.update_model_if_needed()
 
         self.pa = pyaudio.PyAudio()
         self.stream = self.pa.open(format=pyaudio.paInt16,
@@ -43,6 +54,18 @@ class ASRWorkerThread(QThread):
             device=self.device
         )
         self.cache_vad = {}
+
+    def update_model_if_needed(self):
+        # 此处为伪代码：检查更新并下载最新模型到指定目录
+        print("检查模型更新...")
+        force_update = False
+        if self.config:
+            force_update = self.config.get("force_update", False)
+        if force_update:
+            print("强制更新模型...")
+            # 此处可调用模型下载 API
+        else:
+            print("使用缓存模型（如果存在）")
 
     def run(self):
         audio_buffer = np.array([], dtype=np.float32)

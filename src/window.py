@@ -1,14 +1,12 @@
-# window.py
 import os
 import json
 import time
 import re
-from PyQt6.QtWidgets import QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QLineEdit, QPushButton, QApplication
+from PyQt6.QtWidgets import QMainWindow, QWidget, QHBoxLayout, QLineEdit, QPushButton, QApplication
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QMouseEvent, QGuiApplication, QKeyEvent
 import keyboard  # 使用 keyboard 库
 
-# 辅助函数：模拟键入文本到当前活动窗口（不改变当前焦点）
 def insert_text_into_active_window(text):
     try:
         keyboard.write(text)
@@ -22,20 +20,28 @@ class ModernUIWindow(QMainWindow):
         super().__init__()
         self.config = config_dict
         self.setWindowTitle("语音识别悬浮窗口")
-        # 工具窗口、无边框、始终置顶且不抢焦点；设透明度
+        # 使用无边框工具窗口，始终置顶且不抢焦点
         self.setWindowFlags(Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
         self.setWindowOpacity(0.85)
         self.resize(500, 40)
 
-        # 主部件与一行布局：麦克风按钮、文本框、反馈按钮、上屏按钮
+        # 添加最外层边框（仅加边框和圆角，不修改背景颜色）
+        self.setObjectName("MainWindow")
+        self.setStyleSheet("""
+        #MainWindow {
+            border: 1px solid #cccccc;
+            border-radius: 8px;
+        }
+        """)
+
         central_widget = QWidget(self)
         self.setCentralWidget(central_widget)
         layout = QHBoxLayout(central_widget)
         layout.setContentsMargins(5, 5, 5, 5)
         layout.setSpacing(5)
 
-        # 麦克风按钮（左侧）：用于启用/禁用识别，背景色与图标切换
+        # 麦克风按钮
         self.toggle_button = QPushButton("🎤")
         self.toggle_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.toggle_button.setFixedSize(40, 30)
@@ -43,36 +49,34 @@ class ModernUIWindow(QMainWindow):
         self.toggle_button.clicked.connect(self.toggle_recognition)
         layout.addWidget(self.toggle_button)
 
-        # 文本框（中间）：显示识别结果，可编辑
+        # 文本框显示识别内容
         self.recognition_edit = QLineEdit()
         self.recognition_edit.setPlaceholderText("等待识别...")
         self.recognition_edit.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.recognition_edit.setFixedHeight(30)
         layout.addWidget(self.recognition_edit, stretch=1)
 
-        # 反馈按钮（右侧左边）：点击后提交反馈并清空窗口内容
+        # 反馈按钮
         self.feedback_button = QPushButton("反馈")
         self.feedback_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.feedback_button.setFixedSize(60, 30)
         self.feedback_button.clicked.connect(self.on_feedback_clicked)
         layout.addWidget(self.feedback_button)
 
-        # 上屏按钮（右侧最右）：点击后将当前识别结果发送到目标应用，但保留窗口内容
+        # 上屏按钮
         self.manual_send_button = QPushButton("上屏")
         self.manual_send_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.manual_send_button.setFixedSize(60, 30)
         self.manual_send_button.clicked.connect(self.on_manual_send)
         layout.addWidget(self.manual_send_button)
 
-        # 保存最新识别结果，用于反馈比较
         self.last_recognized_text = ""
         self.last_audio_id = ""
         self.last_sent_text = ""
 
-        # 后处理配置：标点控制（使用正则删除末尾句号或全角句号）
         self.remove_trailing_period = self.config.get("remove_trailing_period", True)
-        self.trailing_punctuation = self.config.get("trailing_punctuation", "")  # 留空表示删除
-        self.punctuation_mode = self.config.get("punctuation_mode", "half")  # "half" 或 "full"
+        self.trailing_punctuation = self.config.get("trailing_punctuation", "")
+        self.punctuation_mode = self.config.get("punctuation_mode", "half")
 
         from worker_thread import ASRWorkerThread
         self.worker = ASRWorkerThread(
@@ -86,11 +90,11 @@ class ModernUIWindow(QMainWindow):
         self.worker.start()
         self.recognition_active = True
 
-        keyboard.add_hotkey('ctrl+shift+s', self.toggle_recognition)
+        keyboard.add_hotkey('ctrl+shift+h', self.toggle_recognition)
 
         self._startPos = None
 
-        # 设置窗口位置为屏幕下方居中
+        # 设置窗口位置为屏幕底部居中
         screen = QGuiApplication.primaryScreen()
         if screen:
             geometry = screen.availableGeometry()
@@ -133,7 +137,6 @@ class ModernUIWindow(QMainWindow):
 
     def on_new_recognition(self, recognized_text, audio_id):
         processed = self.process_text(recognized_text)
-        # 只发送与上次不同的内容，防止重复上屏
         if processed and processed != self.last_sent_text:
             insert_text_into_active_window(processed)
             self.last_sent_text = processed
@@ -145,7 +148,8 @@ class ModernUIWindow(QMainWindow):
         current_text = self.recognition_edit.text().strip()
         if current_text:
             if current_text != self.last_sent_text:
-                insert_text_into_active_window(current_text)
+                self.hide()
+                QTimer.singleShot(100, lambda: (insert_text_into_active_window(current_text), self.show()))
                 self.last_sent_text = current_text
         else:
             print("没有文本可上屏。")
@@ -170,7 +174,6 @@ class ModernUIWindow(QMainWindow):
         self.last_sent_text = ""
 
     def keyPressEvent(self, event: QKeyEvent):
-        # PyQt6 中使用 Qt.Key.Key_Escape
         if event.key() == Qt.Key.Key_Escape:
             self.close()
         else:

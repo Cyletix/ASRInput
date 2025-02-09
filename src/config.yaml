@@ -6,6 +6,6 @@ step_seconds: 2
 remove_trailing_period: true
 trailing_punctuation: ""   # 留空表示删除
 punctuation_mode: "half"     # 或 "full"
-model_cache_path: "SenseVoiceSmall"  # 指向项目中的模型目录
+model_cache_path: "models"
 max_cache_count: 20
 cache_clear_interval: 10

@@ -1,4 +1,3 @@
-# worker_thread.py
 import os
 os.environ["FUNASR_DISABLE_UPDATE"] = "1"  # 禁用更新检查
 
@@ -15,7 +14,7 @@ import logging
 logging.getLogger("modelscope").setLevel(logging.ERROR)
 
 class ASRWorkerThread(QThread):
-    # 通过 result_ready 信号传递：识别文本和对应音频ID
+    # 通过 result_ready 信号传递识别文本和对应音频ID
     result_ready = pyqtSignal(str, str)
 
     def __init__(self, sample_rate=16000, chunk=2048, buffer_seconds=8,
@@ -38,13 +37,10 @@ class ASRWorkerThread(QThread):
         self.vad_chunk_ms = 256
         self.vad_chunk_samples = int(self.sample_rate * self.vad_chunk_ms / 1000)
 
-        # 如果配置中指定了模型缓存路径，则设置该目录
+        # 如果配置中指定了模型缓存路径，则创建该目录（环境变量已在 main.py 中设置）
         if self.config and self.config.get("model_cache_path"):
             cache_dir = self.config.get("model_cache_path")
             os.makedirs(cache_dir, exist_ok=True)
-            os.environ["TRANSFORMERS_CACHE"] = cache_dir
-
-        # 更新检查已禁用
 
         self.pa = pyaudio.PyAudio()
         self.stream = self.pa.open(format=pyaudio.paInt16,
@@ -52,16 +48,14 @@ class ASRWorkerThread(QThread):
                                    rate=self.sample_rate,
                                    input=True,
                                    frames_per_buffer=self.chunk)
-        model_cache_dir = os.path.join(self.config["model_cache_path"], self.config["model_name"])
         self.model_vad = AutoModel(
-            model=os.path.join(model_cache_dir, "fsmn-vad"),  # 本地路径
+            model="fsmn-vad",
             model_revision="v2.0.4",
             trust_remote_code=True,
             disable_pbar=True,
             max_end_silence_time=1000,
             disable_update=True,
-            device=self.device,
-            cache_dir=model_cache_dir  # 强制指定缓存目录
+            device=self.device
         )
         self.cache_vad = {}
 
@@ -115,7 +109,11 @@ class ASRWorkerThread(QThread):
                             try:
                                 text = asr_transcribe(segment_audio)
                             except Exception as e:
-                                text = f"识别错误: {e}"
+                                err_str = str(e)
+                                if "choose a window size 0" in err_str:
+                                    text = ""
+                                else:
+                                    text = f"识别错误: {e}"
                             if text and text.strip() and text != last_text:
                                 last_text = text
                                 audio_id = str(int(_time.time() * 1000))
@@ -130,12 +128,10 @@ class ASRWorkerThread(QThread):
                         last_vad_end = -1
                         silence_counter = 0
 
-            # 判断 vad_buffer 时长是否已达到阈值
+            # 如果累计音频超过 buffer_seconds，则进行强制分割
             if len(vad_buffer) / self.sample_rate >= self.buffer_seconds:
-                # 如果检测到了有效的分割点，则计算其在缓冲区中的位置（索引）
                 if last_vad_end > 0:
                     forced_index = int((last_vad_end - offset) * self.sample_rate / 1000)
-                    # 防止计算出无效的索引
                     if forced_index <= 0 or forced_index > len(vad_buffer):
                         forced_index = len(vad_buffer)
                 else:
@@ -145,18 +141,19 @@ class ASRWorkerThread(QThread):
                 try:
                     text = asr_transcribe(segment_audio)
                 except Exception as e:
-                    text = f"识别错误: {e}"
+                    err_str = str(e)
+                    if "choose a window size 0" in err_str:
+                        text = ""
+                    else:
+                        text = f"识别错误: {e}"
                 if text and text.strip() and text != last_text:
                     last_text = text
                     audio_id = str(int(_time.time() * 1000))
                     self.recognized_audio[audio_id] = segment_audio
                     self.result_ready.emit(text, audio_id)
                 
-                # 将已经处理的音频从缓冲中剔除，并更新 offset（注意转换单位：samples 到毫秒）
                 vad_buffer = vad_buffer[forced_index:]
                 offset += (forced_index / self.sample_rate) * 1000
-                
-                # 重置分割相关变量，等待下一个有效分割
                 last_vad_beg = -1
                 last_vad_end = -1
                 silence_counter = 0

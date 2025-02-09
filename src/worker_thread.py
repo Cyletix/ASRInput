@@ -52,14 +52,16 @@ class ASRWorkerThread(QThread):
                                    rate=self.sample_rate,
                                    input=True,
                                    frames_per_buffer=self.chunk)
+        model_cache_dir = os.path.join(self.config["model_cache_path"], self.config["model_name"])
         self.model_vad = AutoModel(
-            model="fsmn-vad",
+            model=os.path.join(model_cache_dir, "fsmn-vad"),  # 本地路径
             model_revision="v2.0.4",
             trust_remote_code=True,
             disable_pbar=True,
             max_end_silence_time=1000,
             disable_update=True,
-            device=self.device
+            device=self.device,
+            cache_dir=model_cache_dir  # 强制指定缓存目录
         )
         self.cache_vad = {}
 

@@ -117,3 +117,7 @@ This project is licensed under the **MIT License**.
 ---
 
 Now, ASRInput is ready for use! 🚀 Let me know if you need refinements.
+
+
+## 项目进度
+卡死在funasr的模型注册了, 无法离线使用, 必须花费大量精力读懂整个程序才行. 这个项目可能要告一段落了

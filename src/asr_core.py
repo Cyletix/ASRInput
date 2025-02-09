@@ -2,12 +2,23 @@
 import time
 import numpy as np
 from funasr import AutoModel
+import os
 
-# 初始化模型
+# 新增配置参数
+MODEL_CACHE_PATH = "models"  # 与config.yaml保持一致
+MODEL_NAME = "iic/SenseVoiceSmall"
+
+# 初始化模型时指定本地路径
 model = AutoModel(
-    model="iic/SenseVoiceSmall",
+    model=os.path.join(MODEL_CACHE_PATH, MODEL_NAME),
     trust_remote_code=True,
+    cache_dir=MODEL_CACHE_PATH,  # 指定缓存目录
+    disable_update=True  # 禁用自动更新
 )
+
+# 在模型初始化后添加验证
+print(f"当前模型路径: {model.model_path}")
+assert os.path.exists(model.model_path), "模型路径不存在，请检查配置"
 
 # 以下格式化函数取自 server.py 的实现，去掉无用的标记
 emo_dict = {
@@ -126,4 +137,3 @@ def asr_transcribe(input_wav: np.ndarray) -> str:
     # 调用格式化函数去掉前缀标记
     formatted_text = format_str_v3(raw_text)
     return formatted_text
-

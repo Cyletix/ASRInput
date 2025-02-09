@@ -4,6 +4,11 @@ import yaml
 from PyQt6.QtWidgets import QApplication
 from window import ModernUIWindow
 
+# main.py 新增部分
+os.environ["MODELSCOPE_CACHE"] = os.path.join(os.getcwd(), "models")
+os.environ["TRANSFORMERS_CACHE"] = os.path.join(os.getcwd(), "models")
+os.environ["FUNASR_DISABLE_UPDATE"] = "1"  # 禁用自动更新
+
 def load_config(config_path):
     if not os.path.exists(config_path):
         print("[Warning] config file not found, using defaults.")

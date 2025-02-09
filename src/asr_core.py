@@ -114,7 +114,7 @@ def format_str_v3(s):
     new_s = new_s.replace("The.", " ")
     return new_s.strip()
 
-def asr_transcribe(input_wav: np.ndarray) -> str:
+def asr_transcribe(input_wav: np.ndarray, config=None) -> str:
     start_time = time.time()
     result = model.generate(
         input=input_wav,
@@ -124,5 +124,15 @@ def asr_transcribe(input_wav: np.ndarray) -> str:
         batch_size=64
     )
     raw_text = result[0]["text"]
-    formatted_text = format_str_v3(raw_text)
+    # 根据配置决定是否进行表情和说话人处理
+    if config:
+        if not config.get("enable_emoji", True):
+            formatted_text = raw_text.strip()
+        else:
+            formatted_text = format_str_v3(raw_text)
+        if not config.get("enable_speaker", True):
+            # 示例：如果禁用说话人识别，则移除可能的说话人标识（假设标识为 "Speaker:"）
+            formatted_text = formatted_text.replace("Speaker:", "").strip()
+    else:
+        formatted_text = format_str_v3(raw_text)
     return formatted_text

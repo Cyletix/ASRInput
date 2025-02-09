@@ -25,20 +25,20 @@ class ASRWorkerThread(QThread):
         self.buffer_seconds = buffer_seconds
         self.device = device
         self.running = True
-        self.config = config
+        self.config = config if config is not None else {}
 
         # 保存识别成功但尚未反馈的音频数据： audio_id -> numpy array
         self.recognized_audio = {}
-        self.max_cache_count = self.config.get("max_cache_count", 20) if self.config else 20
-        self.cache_clear_interval = self.config.get("cache_clear_interval", 10) if self.config else 10
+        self.max_cache_count = self.config.get("max_cache_count", 20)
+        self.cache_clear_interval = self.config.get("cache_clear_interval", 10)
         self.last_cache_clear_time = _time.time()
 
-        # VAD 参数：以256毫秒为窗口
-        self.vad_chunk_ms = 256
+        # VAD 参数：以256毫秒为窗口，支持动态修改
+        self.vad_chunk_ms = self.config.get("vad_interval", 256)
         self.vad_chunk_samples = int(self.sample_rate * self.vad_chunk_ms / 1000)
 
         # 如果配置中指定了模型缓存路径，则创建该目录（环境变量已在 main.py 中设置）
-        if self.config and self.config.get("model_cache_path"):
+        if self.config.get("model_cache_path"):
             cache_dir = self.config.get("model_cache_path")
             os.makedirs(cache_dir, exist_ok=True)
 
@@ -107,7 +107,7 @@ class ASRWorkerThread(QThread):
                         if end > beg and end <= len(vad_buffer):
                             segment_audio = vad_buffer[beg:end]
                             try:
-                                text = asr_transcribe(segment_audio)
+                                text = asr_transcribe(segment_audio, self.config)
                             except Exception as e:
                                 err_str = str(e)
                                 if "choose a window size 0" in err_str:
@@ -128,8 +128,9 @@ class ASRWorkerThread(QThread):
                         last_vad_end = -1
                         silence_counter = 0
 
-            # 如果累计音频超过 buffer_seconds，则进行强制分割
-            if len(vad_buffer) / self.sample_rate >= self.buffer_seconds:
+            # 强制分割：当累计音频超过设定的最大句子时长（默认为4秒）
+            max_sentence_seconds = self.config.get("max_sentence_seconds", 4)
+            if len(vad_buffer) / self.sample_rate >= max_sentence_seconds:
                 if last_vad_end > 0:
                     forced_index = int((last_vad_end - offset) * self.sample_rate / 1000)
                     if forced_index <= 0 or forced_index > len(vad_buffer):
@@ -139,7 +140,7 @@ class ASRWorkerThread(QThread):
                 
                 segment_audio = vad_buffer[:forced_index]
                 try:
-                    text = asr_transcribe(segment_audio)
+                    text = asr_transcribe(segment_audio, self.config)
                 except Exception as e:
                     err_str = str(e)
                     if "choose a window size 0" in err_str:

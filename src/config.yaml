@@ -1,11 +1,15 @@
 model_name: large
 language: zh
-device: cuda  # 或 "cpu"
-buffer_seconds: 8
+device: cuda           # 或 "cpu"
+buffer_seconds: 4      # 缓冲时间，单位秒
 step_seconds: 2
 remove_trailing_period: true
-trailing_punctuation: ""   # 留空表示删除
-punctuation_mode: "half"     # 或 "full"
+trailing_punctuation: ""
+punctuation_mode: "half"
 model_cache_path: "models"
 max_cache_count: 20
 cache_clear_interval: 10
+recognize_emoji: true         # 是否识别表情（在后处理中使用）
+recognize_speaker: false      # 是否识别说话人
+accept_feedback: false        # 是否接受反馈
+feedback_path: "feedback"

@@ -22,7 +22,8 @@ class ASRWorkerThread(QThread):
                  device="cpu", config=None, parent=None):
         super().__init__(parent)
         self.sample_rate = sample_rate
-        self.chunk = chunk
+        # 优先使用配置中的 chunk 值
+        self.chunk = (config.get("chunk") if config and "chunk" in config else chunk)
         self.buffer_seconds = buffer_seconds
         self.device = device
         self.running = True
@@ -38,7 +39,7 @@ class ASRWorkerThread(QThread):
         self.vad_chunk_ms = self.config.get("vad_interval", 256)
         self.vad_chunk_samples = int(self.sample_rate * self.vad_chunk_ms / 1000)
 
-        # 如果配置中指定了模型缓存路径，则创建该目录（环境变量已在 main.py 中设置）
+        # 如果配置中指定了模型缓存路径，则创建该目录
         if self.config.get("model_cache_path"):
             cache_dir = self.config.get("model_cache_path")
             os.makedirs(cache_dir, exist_ok=True)
@@ -50,7 +51,8 @@ class ASRWorkerThread(QThread):
                                    input=True,
                                    frames_per_buffer=self.chunk)
         self.model_vad = AutoModel(
-            model="fsmn-vad",
+            # model="fsmn-vad",
+            model="C:/Users/Administrator/.cache/modelscope/hub/iic/speech_fsmn_vad_zh-cn-16k-common-pytorch",
             model_revision="v2.0.4",
             trust_remote_code=True,
             disable_pbar=True,
@@ -62,7 +64,7 @@ class ASRWorkerThread(QThread):
         # 注意：不要在此处发出 initialized 信号，而是在 run() 中发出
 
     def run(self):
-        # 工作线程初始化完成后发出信号，通知 UI 停止加载动画
+        # 发出初始化完成信号以便 UI 开始停止加载动画
         self.initialized.emit()
 
         audio_buffer = np.array([], dtype=np.float32)
@@ -74,7 +76,6 @@ class ASRWorkerThread(QThread):
         silence_counter = 0
         required_silence_count = 1
 
-        # 设置噪声阈值，用于过滤低能量背景噪声（可通过配置调整）
         noise_threshold = self.config.get("noise_threshold", 0.01)
 
         while self.running:
@@ -114,7 +115,6 @@ class ASRWorkerThread(QThread):
                         end = int((last_vad_end - offset) * self.sample_rate / 1000)
                         if end > beg and end <= len(vad_buffer):
                             segment_audio = vad_buffer[beg:end]
-                            # 检查音频能量，低于阈值则跳过识别
                             rms = np.sqrt(np.mean(segment_audio**2))
                             if rms < noise_threshold:
                                 vad_buffer = vad_buffer[end:]
@@ -133,8 +133,11 @@ class ASRWorkerThread(QThread):
                                     text = f"识别错误: {e}"
                             if text and text.strip() and text != last_text:
                                 last_text = text
-                                audio_id = str(int(_time.time() * 1000))
-                                self.recognized_audio[audio_id] = segment_audio
+                                if self.config.get("accept_feedback", False):
+                                    audio_id = str(int(_time.time() * 1000))
+                                    self.recognized_audio[audio_id] = segment_audio
+                                else:
+                                    audio_id = ""
                                 self.result_ready.emit(text, audio_id)
                                 if len(self.recognized_audio) > self.max_cache_count:
                                     oldest_key = next(iter(self.recognized_audio))
@@ -145,7 +148,6 @@ class ASRWorkerThread(QThread):
                         last_vad_end = -1
                         silence_counter = 0
 
-            # 强制分割：当累计音频超过设定的最大句子时长（默认为4秒）
             max_sentence_seconds = self.config.get("max_sentence_seconds", 4)
             if len(vad_buffer) / self.sample_rate >= max_sentence_seconds:
                 if last_vad_end > 0:
@@ -168,8 +170,11 @@ class ASRWorkerThread(QThread):
                             text = f"识别错误: {e}"
                     if text and text.strip() and text != last_text:
                         last_text = text
-                        audio_id = str(int(_time.time() * 1000))
-                        self.recognized_audio[audio_id] = segment_audio
+                        if self.config.get("accept_feedback", False):
+                            audio_id = str(int(_time.time() * 1000))
+                            self.recognized_audio[audio_id] = segment_audio
+                        else:
+                            audio_id = ""
                         self.result_ready.emit(text, audio_id)
                 vad_buffer = vad_buffer[forced_index:]
                 offset += (forced_index / self.sample_rate) * 1000

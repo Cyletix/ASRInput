@@ -11,19 +11,20 @@ def load_config(config_path):
             "language": "zh",
             "device": "cuda",
             "buffer_seconds": 5,
-            "step_seconds": 2,
+            "step_seconds": 1,
             "remove_trailing_period": True,
-            "trailing_punctuation": "",
-            "punctuation_mode": "half",
+            "trailing_punctuation": "",  # 自定义结尾标点（可为空、半角、全角或空格）
+            "punctuation_mode": "half",  # 可选 "half"、"full"、"space"、"none"
             "model_cache_path": "models",
             "max_cache_count": 20,
             "cache_clear_interval": 10,
-            "enable_emoji": False,
-            "enable_speaker": False,
-            "enable_feedback": False,
+            "recognize_emoji": False,
+            "recognize_speaker": False,
+            "accept_feedback": False,
             "vad_interval": 256,
             "noise_threshold": 0.01,
-            "max_sentence_seconds": 4
+            "max_sentence_seconds": 4,
+            "chunk": 1024  # 默认 chunk 大小
         }
     with open(config_path, "r", encoding="utf-8") as f:
         return yaml.safe_load(f)

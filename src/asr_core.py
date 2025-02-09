@@ -5,7 +5,8 @@ from funasr import AutoModel
 
 # 使用本地模型（前提是环境变量 TRANSFORMERS_CACHE 已正确设置）
 model = AutoModel(
-    model="iic/SenseVoiceSmall",
+    # model="iic/SenseVoiceSmall",
+    model="C:/Users/Administrator/.cache/modelscope/hub/iic/SenseVoiceSmall",
     trust_remote_code=True,
     # 如支持 local_files_only 参数，可加上 local_files_only=True
     # local_files_only=True
@@ -130,7 +131,7 @@ def asr_transcribe(input_wav: np.ndarray, config=None) -> str:
             formatted_text = re.sub(r"<\|[^>]+\|>", "", raw_text).strip()
         else:
             formatted_text = format_str_v3(raw_text)
-        # 无论识别说话人开关如何，都不显示 "Speaker:" 前缀
+        # 无论是否启用识别说话人，都不在文本中添加 "Speaker:" 前缀
         formatted_text = formatted_text.replace("Speaker:", "").strip()
     else:
         formatted_text = format_str_v3(raw_text)

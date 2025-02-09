@@ -6,6 +6,7 @@ from PyQt6.QtWidgets import QMainWindow, QWidget, QHBoxLayout, QLineEdit, QPushB
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QMouseEvent, QGuiApplication, QKeyEvent, QIcon, QAction
 import keyboard  # 使用 keyboard 库
+from asr_core import emo_set  # 用于提取表情
 
 def insert_text_into_active_window(text):
     try:
@@ -24,15 +25,14 @@ class ModernUIWindow(QMainWindow):
         self.setWindowFlags(Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
         self.setWindowOpacity(0.85)
-        # 调整整体UI尺寸稍大一些（例如450x40），用于鼠标拖动空间
+        # 整体尺寸调整为 450x40，便于鼠标拖动
         self.resize(450, 40)
 
-        # 设置纯黑背景和马卡龙风格边框（2px淡粉色边框）
         self.setObjectName("MainWindow")
         self.setStyleSheet("""
         #MainWindow {
             background-color: #000000;
-            border: 2px solid #FFB6C1;
+            border: 1px solid #0060ff;
             border-radius: 8px;
         }
         """)
@@ -66,8 +66,8 @@ class ModernUIWindow(QMainWindow):
         self.feedback_button.clicked.connect(self.on_feedback_clicked)
         layout.addWidget(self.feedback_button)
 
-        # 如果配置中取消了接受反馈，则隐藏反馈按钮
-        if not self.config.get("enable_feedback", True):
+        # 若配置中禁用接受反馈，则隐藏反馈按钮
+        if not self.config.get("accept_feedback", False):
             self.feedback_button.hide()
 
         # 上屏按钮
@@ -85,11 +85,12 @@ class ModernUIWindow(QMainWindow):
         self.trailing_punctuation = self.config.get("trailing_punctuation", "")
         self.punctuation_mode = self.config.get("punctuation_mode", "half")
 
-        # 用于自动上屏的定时器（延迟3秒）
+        # 自动上屏定时器（延迟3秒）
         self.auto_send_timer = QTimer(self)
         self.auto_send_timer.setSingleShot(True)
         self.auto_send_timer.timeout.connect(self.auto_send)
 
+        # 创建工作线程（启动后将根据需要重启）
         from worker_thread import ASRWorkerThread
         self.worker = ASRWorkerThread(
             sample_rate=16000,
@@ -107,7 +108,7 @@ class ModernUIWindow(QMainWindow):
 
         self._startPos = None
 
-        # 设置窗口位置为屏幕底部居中
+        # 屏幕底部居中
         screen = QGuiApplication.primaryScreen()
         if screen:
             geometry = screen.availableGeometry()
@@ -117,18 +118,21 @@ class ModernUIWindow(QMainWindow):
 
         # 初始化系统托盘图标及菜单
         self.init_tray_icon()
-        self.exiting = False  # 用于标识是否真的退出
+        self.exiting = False  # 标识是否退出
 
-        # 用于麦克风加载时的转圈动画控制
+        # 麦克风加载时的转圈动画
         self.loading = False
         self.spinner_index = 0
         self.spinner_icons = ["◐", "◓", "◑", "◒"]
         self.loading_timer = QTimer(self)
         self.loading_timer.timeout.connect(self.update_spinner)
 
+        # 初始化日志文件（日志文件名使用时间戳，输出到指定目录）
+        self.log_file_path = f"log/recognition_{time.strftime('%Y%m%d_%H%M%S')}.log"
+        self.log_file = open(self.log_file_path, "a", encoding="utf-8")
+
     def init_tray_icon(self):
         self.tray_icon = QSystemTrayIcon(self)
-        # 使用一个默认图标，可自行替换为合适的图标路径
         self.tray_icon.setIcon(QIcon.fromTheme("application-exit"))
         self.tray_menu = QMenu()
 
@@ -136,28 +140,27 @@ class ModernUIWindow(QMainWindow):
         self.action_show.triggered.connect(self.show_window_from_tray)
         self.tray_menu.addAction(self.action_show)
 
-        # 设置项：是否识别表情
+        # 配置：是否识别表情
         self.action_toggle_emoji = QAction("识别表情", self, checkable=True)
-        self.action_toggle_emoji.setChecked(self.config.get("enable_emoji", True))
-        self.action_toggle_emoji.triggered.connect(self.toggle_emoji)
+        self.action_toggle_emoji.setChecked(self.config.get("recognize_emoji", False))
+        self.action_toggle_emoji.triggered.connect(lambda checked: self.config.update({"recognize_emoji": checked}) or print("识别表情设置:", checked))
         self.tray_menu.addAction(self.action_toggle_emoji)
 
-        # 设置项：是否识别说话人
+        # 配置：是否识别说话人
         self.action_toggle_speaker = QAction("识别说话人", self, checkable=True)
-        self.action_toggle_speaker.setChecked(self.config.get("enable_speaker", True))
-        self.action_toggle_speaker.triggered.connect(self.toggle_speaker)
+        self.action_toggle_speaker.setChecked(self.config.get("recognize_speaker", False))
+        self.action_toggle_speaker.triggered.connect(lambda checked: self.config.update({"recognize_speaker": checked}) or print("识别说话人设置:", checked))
         self.tray_menu.addAction(self.action_toggle_speaker)
 
-        # 设置项：是否接受反馈
+        # 配置：是否接受反馈
         self.action_toggle_feedback = QAction("接受反馈", self, checkable=True)
-        self.action_toggle_feedback.setChecked(self.config.get("enable_feedback", True))
-        self.action_toggle_feedback.triggered.connect(self.toggle_feedback)
+        self.action_toggle_feedback.setChecked(self.config.get("accept_feedback", False))
+        self.action_toggle_feedback.triggered.connect(lambda checked: self.config.update({"accept_feedback": checked}) or (self.feedback_button.setVisible(checked)) or print("接受反馈设置:", checked))
         self.tray_menu.addAction(self.action_toggle_feedback)
 
         # 子菜单：选择语言
         self.language_menu = QMenu("选择语言", self)
-        languages = ["zh", "en", "ja"]
-        for lang in languages:
+        for lang in ["zh", "en", "ja"]:
             action = QAction(lang, self, checkable=True)
             action.setData(lang)
             if lang == self.config.get("language", "zh"):
@@ -168,8 +171,7 @@ class ModernUIWindow(QMainWindow):
 
         # 子菜单：VAD间隔设置
         self.vad_menu = QMenu("VAD间隔", self)
-        vad_intervals = [256, 512, 1024]
-        for interval in vad_intervals:
+        for interval in [256, 512, 1024]:
             action = QAction(f"{interval} ms", self, checkable=True)
             action.setData(interval)
             if interval == self.config.get("vad_interval", 256):
@@ -184,7 +186,6 @@ class ModernUIWindow(QMainWindow):
         self.tray_menu.addAction(self.action_exit)
 
         self.tray_icon.setContextMenu(self.tray_menu)
-        # 支持双击托盘图标恢复窗口
         self.tray_icon.activated.connect(self.on_tray_icon_activated)
         self.tray_icon.show()
 
@@ -192,22 +193,6 @@ class ModernUIWindow(QMainWindow):
         from PyQt6.QtWidgets import QSystemTrayIcon
         if reason == QSystemTrayIcon.ActivationReason.DoubleClick:
             self.show_window_from_tray()
-
-    def toggle_emoji(self, checked):
-        self.config["enable_emoji"] = checked
-        print("识别表情设置:", checked)
-
-    def toggle_speaker(self, checked):
-        self.config["enable_speaker"] = checked
-        print("识别说话人设置:", checked)
-
-    def toggle_feedback(self, checked):
-        self.config["enable_feedback"] = checked
-        print("接受反馈设置:", checked)
-        if not checked:
-            self.feedback_button.hide()
-        else:
-            self.feedback_button.show()
 
     def set_language(self, action):
         lang = action.data()
@@ -252,41 +237,61 @@ class ModernUIWindow(QMainWindow):
             self.toggle_button.setStyleSheet("background-color: lightcoral; border-radius: 5px;")
             print("识别已停止")
         else:
+            # 为了让转圈动画显示，先启动加载动画，再延迟启动工作线程
             self.loading = True
             self.spinner_index = 0
             self.toggle_button.setEnabled(False)
             self.loading_timer.start(200)
-            from worker_thread import ASRWorkerThread
-            self.worker = ASRWorkerThread(
-                sample_rate=16000,
-                chunk=2048,
-                buffer_seconds=self.config.get("buffer_seconds", 8),
-                device=self.config.get("device", "cpu"),
-                config=self.config
-            )
-            self.worker.result_ready.connect(self.on_new_recognition)
-            self.worker.initialized.connect(self.on_worker_initialized)
-            self.worker.start()
-            self.recognition_active = True
-            print("识别启动中...")
+            QTimer.singleShot(50, self.start_worker)
+
+    def start_worker(self):
+        from worker_thread import ASRWorkerThread
+        self.worker = ASRWorkerThread(
+            sample_rate=16000,
+            chunk=2048,
+            buffer_seconds=self.config.get("buffer_seconds", 8),
+            device=self.config.get("device", "cpu"),
+            config=self.config
+        )
+        self.worker.result_ready.connect(self.on_new_recognition)
+        self.worker.initialized.connect(self.on_worker_initialized)
+        self.worker.start()
+        self.recognition_active = True
+        print("识别启动中...")
 
     def on_worker_initialized(self):
         self.loading_timer.stop()
         self.loading = False
         self.toggle_button.setEnabled(True)
         self.toggle_button.setText("🎤")
-        self.toggle_button.setStyleSheet("background-color: lightgreen; border-radius: 5px;")
+        self.toggle_button.setStyleSheet("background-color: #00ff64; border-radius: 5px;")
         print("识别已启动")
 
     def update_spinner(self):
         self.spinner_index = (self.spinner_index + 1) % len(self.spinner_icons)
         self.toggle_button.setText(self.spinner_icons[self.spinner_index])
 
+    def extract_emojis(self, text):
+        # 简单提取 emo_set 中出现的表情
+        return "".join(ch for ch in text if ch in emo_set)
+
+    def log_recognition(self, text):
+        record = {
+            "时间": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "语言": self.config.get("language", "zh"),
+            "表情": self.extract_emojis(text),
+            "内容": text
+        }
+        self.log_file.write(json.dumps(record, ensure_ascii=False) + "\n")
+        self.log_file.flush()
+
     def on_new_recognition(self, recognized_text, audio_id):
         processed = self.process_text(recognized_text)
         self.last_recognized_text = processed
         self.last_audio_id = audio_id
         self.recognition_edit.setText(processed)
+        # 记录日志（每次识别的内容均写入日志）
+        self.log_recognition(processed)
         if self.auto_send_timer.isActive():
             self.auto_send_timer.stop()
         self.auto_send_timer.start(3000)
@@ -311,7 +316,7 @@ class ModernUIWindow(QMainWindow):
             print("没有文本可上屏。")
 
     def on_feedback_clicked(self):
-        if not self.config.get("enable_feedback", True):
+        if not self.config.get("accept_feedback", False):
             print("反馈功能已禁用。")
             return
         current_text = self.recognition_edit.text().strip()
@@ -358,6 +363,7 @@ class ModernUIWindow(QMainWindow):
             if self.recognition_active:
                 self.worker.stop()
                 self.worker.wait()
+            self.log_file.close()
             event.accept()
         else:
             self.hide()

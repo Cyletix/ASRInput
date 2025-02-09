@@ -18,7 +18,7 @@ class ASRWorkerThread(QThread):
     # 新增初始化完成信号，用于通知 UI 层停止加载动画
     initialized = pyqtSignal()
 
-    def __init__(self, sample_rate=16000, chunk=2048, buffer_seconds=8,
+    def __init__(self, sample_rate=16000, chunk=1024, buffer_seconds=8,
                  device="cpu", config=None, parent=None):
         super().__init__(parent)
         self.sample_rate = sample_rate

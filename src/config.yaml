@@ -1,8 +1,8 @@
 model_name: large
 language: zh
 device: cuda           # 或 "cpu"
-buffer_seconds: 4      # 缓冲时间，单位秒
-step_seconds: 2
+buffer_seconds: 1.5      # 缓冲时间，单位秒
+step_seconds: 0.5
 remove_trailing_period: true
 trailing_punctuation: ""
 punctuation_mode: "half"

@@ -10,8 +10,8 @@ def load_config(config_path):
             "model_name": "large",
             "language": "zh",
             "device": "cuda",
-            "buffer_seconds": 5,
-            "step_seconds": 1,
+            "buffer_seconds": 1.5,
+            "step_seconds": 0.5,
             "remove_trailing_period": True,
             "trailing_punctuation": "",  # 自定义结尾标点（可为空、半角、全角或空格）
             "punctuation_mode": "half",  # 可选 "half"、"full"、"space"、"none"

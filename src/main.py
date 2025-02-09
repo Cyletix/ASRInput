@@ -18,14 +18,17 @@ def load_config(config_path):
             "model_cache_path": "models",
             "max_cache_count": 20,
             "cache_clear_interval": 10,
-            "recognize_emoji": True,
-            "recognize_speaker": False,
-            "accept_feedback": False
+            "enable_emoji": False,
+            "enable_speaker": False,
+            "enable_feedback": False,
+            "vad_interval": 256,
+            "noise_threshold": 0.01,
+            "max_sentence_seconds": 4
         }
     with open(config_path, "r", encoding="utf-8") as f:
         return yaml.safe_load(f)
 
-# main.py 位于 src 文件夹中
+# main.py 位于 src 文件夹中，模型文件夹在项目根目录下
 config_path = os.path.join(os.path.dirname(__file__), "config.yaml")
 config_dict = load_config(config_path)
 

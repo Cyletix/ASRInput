@@ -2,7 +2,7 @@ import os
 import json
 import time
 import re
-from PyQt6.QtWidgets import QMainWindow, QWidget, QHBoxLayout, QLineEdit, QPushButton, QApplication, QSystemTrayIcon, QMenu
+from PyQt6.QtWidgets import QMainWindow, QWidget, QHBoxLayout, QLineEdit, QPushButton, QApplication, QSystemTrayIcon, QMenu, QSizePolicy
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QMouseEvent, QGuiApplication, QKeyEvent, QIcon, QAction
 import keyboard  # 使用 keyboard 库
@@ -24,14 +24,15 @@ class ModernUIWindow(QMainWindow):
         self.setWindowFlags(Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
         self.setWindowOpacity(0.85)
-        # 缩小整体UI尺寸
-        self.resize(400, 30)
+        # 调整整体UI尺寸稍大一些（例如450x40），用于鼠标拖动空间
+        self.resize(450, 40)
 
-        # 添加最外层边框（仅加边框和圆角，不修改背景颜色）
+        # 设置纯黑背景和马卡龙风格边框（2px淡粉色边框）
         self.setObjectName("MainWindow")
         self.setStyleSheet("""
         #MainWindow {
-            border: 1px solid #cccccc;
+            background-color: #000000;
+            border: 2px solid #FFB6C1;
             border-radius: 8px;
         }
         """)
@@ -39,8 +40,8 @@ class ModernUIWindow(QMainWindow):
         central_widget = QWidget(self)
         self.setCentralWidget(central_widget)
         layout = QHBoxLayout(central_widget)
-        layout.setContentsMargins(2, 2, 2, 2)
-        layout.setSpacing(2)
+        layout.setContentsMargins(5, 5, 5, 5)
+        layout.setSpacing(5)
 
         # 麦克风按钮
         self.toggle_button = QPushButton("🎤")
@@ -55,6 +56,7 @@ class ModernUIWindow(QMainWindow):
         self.recognition_edit.setPlaceholderText("等待识别...")
         self.recognition_edit.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.recognition_edit.setFixedHeight(25)
+        self.recognition_edit.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         layout.addWidget(self.recognition_edit, stretch=1)
 
         # 反馈按钮
@@ -63,6 +65,10 @@ class ModernUIWindow(QMainWindow):
         self.feedback_button.setFixedSize(50, 25)
         self.feedback_button.clicked.connect(self.on_feedback_clicked)
         layout.addWidget(self.feedback_button)
+
+        # 如果配置中取消了接受反馈，则隐藏反馈按钮
+        if not self.config.get("enable_feedback", True):
+            self.feedback_button.hide()
 
         # 上屏按钮
         self.manual_send_button = QPushButton("上屏")
@@ -93,6 +99,7 @@ class ModernUIWindow(QMainWindow):
             config=self.config
         )
         self.worker.result_ready.connect(self.on_new_recognition)
+        self.worker.initialized.connect(self.on_worker_initialized)
         self.worker.start()
         self.recognition_active = True
 
@@ -112,9 +119,16 @@ class ModernUIWindow(QMainWindow):
         self.init_tray_icon()
         self.exiting = False  # 用于标识是否真的退出
 
+        # 用于麦克风加载时的转圈动画控制
+        self.loading = False
+        self.spinner_index = 0
+        self.spinner_icons = ["◐", "◓", "◑", "◒"]
+        self.loading_timer = QTimer(self)
+        self.loading_timer.timeout.connect(self.update_spinner)
+
     def init_tray_icon(self):
         self.tray_icon = QSystemTrayIcon(self)
-        # 使用一个默认图标，可以自行替换为合适的图标路径
+        # 使用一个默认图标，可自行替换为合适的图标路径
         self.tray_icon.setIcon(QIcon.fromTheme("application-exit"))
         self.tray_menu = QMenu()
 
@@ -170,7 +184,14 @@ class ModernUIWindow(QMainWindow):
         self.tray_menu.addAction(self.action_exit)
 
         self.tray_icon.setContextMenu(self.tray_menu)
+        # 支持双击托盘图标恢复窗口
+        self.tray_icon.activated.connect(self.on_tray_icon_activated)
         self.tray_icon.show()
+
+    def on_tray_icon_activated(self, reason):
+        from PyQt6.QtWidgets import QSystemTrayIcon
+        if reason == QSystemTrayIcon.ActivationReason.DoubleClick:
+            self.show_window_from_tray()
 
     def toggle_emoji(self, checked):
         self.config["enable_emoji"] = checked
@@ -183,11 +204,14 @@ class ModernUIWindow(QMainWindow):
     def toggle_feedback(self, checked):
         self.config["enable_feedback"] = checked
         print("接受反馈设置:", checked)
+        if not checked:
+            self.feedback_button.hide()
+        else:
+            self.feedback_button.show()
 
     def set_language(self, action):
         lang = action.data()
         self.config["language"] = lang
-        # 取消其他语言选项的选中状态
         for act in self.language_menu.actions():
             act.setChecked(act == action)
         print("语言设置为:", lang)
@@ -195,11 +219,9 @@ class ModernUIWindow(QMainWindow):
     def set_vad_interval(self, action):
         interval = action.data()
         self.config["vad_interval"] = interval
-        # 更新工作线程的 VAD 参数，如有需要
         if hasattr(self, "worker"):
             self.worker.vad_chunk_ms = interval
             self.worker.vad_chunk_samples = int(self.worker.sample_rate * interval / 1000)
-        # 取消其他选项的选中状态
         for act in self.vad_menu.actions():
             act.setChecked(act == action)
         print("VAD间隔设置为:", interval, "ms")
@@ -220,6 +242,9 @@ class ModernUIWindow(QMainWindow):
 
     def toggle_recognition(self):
         if self.recognition_active:
+            if self.loading:
+                self.loading_timer.stop()
+                self.loading = False
             self.worker.stop()
             self.worker.wait()
             self.recognition_active = False
@@ -227,6 +252,10 @@ class ModernUIWindow(QMainWindow):
             self.toggle_button.setStyleSheet("background-color: lightcoral; border-radius: 5px;")
             print("识别已停止")
         else:
+            self.loading = True
+            self.spinner_index = 0
+            self.toggle_button.setEnabled(False)
+            self.loading_timer.start(200)
             from worker_thread import ASRWorkerThread
             self.worker = ASRWorkerThread(
                 sample_rate=16000,
@@ -236,24 +265,33 @@ class ModernUIWindow(QMainWindow):
                 config=self.config
             )
             self.worker.result_ready.connect(self.on_new_recognition)
+            self.worker.initialized.connect(self.on_worker_initialized)
             self.worker.start()
             self.recognition_active = True
-            self.toggle_button.setText("🎤")
-            self.toggle_button.setStyleSheet("background-color: lightgreen; border-radius: 5px;")
-            print("识别已启动")
+            print("识别启动中...")
+
+    def on_worker_initialized(self):
+        self.loading_timer.stop()
+        self.loading = False
+        self.toggle_button.setEnabled(True)
+        self.toggle_button.setText("🎤")
+        self.toggle_button.setStyleSheet("background-color: lightgreen; border-radius: 5px;")
+        print("识别已启动")
+
+    def update_spinner(self):
+        self.spinner_index = (self.spinner_index + 1) % len(self.spinner_icons)
+        self.toggle_button.setText(self.spinner_icons[self.spinner_index])
 
     def on_new_recognition(self, recognized_text, audio_id):
         processed = self.process_text(recognized_text)
         self.last_recognized_text = processed
         self.last_audio_id = audio_id
         self.recognition_edit.setText(processed)
-        # 重置自动上屏定时器
         if self.auto_send_timer.isActive():
             self.auto_send_timer.stop()
         self.auto_send_timer.start(3000)
 
     def auto_send(self):
-        # 如果文本框获得焦点，则取消自动上屏
         if self.recognition_edit.hasFocus():
             print("自动上屏已取消，因为文本框处于激活状态。")
             return
@@ -296,7 +334,6 @@ class ModernUIWindow(QMainWindow):
 
     def keyPressEvent(self, event: QKeyEvent):
         if event.key() == Qt.Key.Key_Escape:
-            # 按 ESC 键隐藏窗口到系统托盘，而不是退出应用
             self.hide()
             print("窗口已隐藏到系统托盘。")
         else:
@@ -333,7 +370,6 @@ class ModernUIWindow(QMainWindow):
         QApplication.quit()
 
 if __name__ == "__main__":
-    # For testing the window independently
     import sys
     app = QApplication(sys.argv)
     window = ModernUIWindow({})

@@ -1,5 +1,6 @@
 import time
 import numpy as np
+import re
 from funasr import AutoModel
 
 # 使用本地模型（前提是环境变量 TRANSFORMERS_CACHE 已正确设置）
@@ -46,7 +47,7 @@ emoji_dict = {
     "<|Speech|>": "",
     "<|Applause|>": "👏",
     "<|Laughter|>": "😀",
-    "<|FEARFUL|>": "😰",
+    "<|FEEARFUL|>": "😰",
     "<|DISGUSTED|>": "🤢",
     "<|SURPRISED|>": "😮",
     "<|Cry|>": "😭",
@@ -127,12 +128,17 @@ def asr_transcribe(input_wav: np.ndarray, config=None) -> str:
     # 根据配置决定是否进行表情和说话人处理
     if config:
         if not config.get("enable_emoji", True):
-            formatted_text = raw_text.strip()
+            # 关闭表情识别时，直接将所有 <|...|> 标签替换为空串
+            formatted_text = re.sub(r"<\|[^>]+\|>", "", raw_text).strip()
         else:
             formatted_text = format_str_v3(raw_text)
         if not config.get("enable_speaker", True):
-            # 示例：如果禁用说话人识别，则移除可能的说话人标识（假设标识为 "Speaker:"）
+            # 如果禁用说话人识别，则移除可能的说话人标识（假设标识为 "Speaker:"）
             formatted_text = formatted_text.replace("Speaker:", "").strip()
+        else:
+            # 启用说话人识别时，若文本未包含“Speaker:”则添加默认标签（仅示例）
+            if not formatted_text.startswith("Speaker:"):
+                formatted_text = "Speaker: " + formatted_text
     else:
         formatted_text = format_str_v3(raw_text)
     return formatted_text

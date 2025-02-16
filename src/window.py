@@ -41,7 +41,7 @@ class ModernUIWindow(QMainWindow):
         self.worker = None
         self.exiting = False  # 退出标志
 
-        # 根据反馈模式构建界面
+        # 构建界面（普通模式与反馈模式均采用原有透明圆角风格）
         if self.config.get("accept_feedback", False):
             self.setFixedSize(400, 40)
             flags = (Qt.WindowType.Tool |
@@ -56,8 +56,8 @@ class ModernUIWindow(QMainWindow):
             
             self.toggle_button = QPushButton()
             self.setup_round_button(self.toggle_button, 60, 36, "#292929")
-            # 反馈模式下调用统一函数设置为激活（蓝色）状态
-            self.update_toggle_icon(True)
+            # 初始化为非激活状态：灰色图标
+            self.set_disabled_state()
             self.toggle_button.clicked.connect(self.toggle_recognition)
             self.toggle_button.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
             layout.addWidget(self.toggle_button)
@@ -67,16 +67,13 @@ class ModernUIWindow(QMainWindow):
             self.recognition_edit.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
             self.recognition_edit.setFixedHeight(25)
             self.recognition_edit.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-            # 设置圆角 8px
             self.recognition_edit.setStyleSheet("border: 1px solid #292929; border-bottom: 2px solid #7886C7; border-radius: 8px; padding: 0px;")
             layout.addWidget(self.recognition_edit, stretch=1)
-            # 当输入框获得焦点时暂停识别
             self.recognition_edit.installEventFilter(self)
             
             self.feedback_button = QPushButton("反馈")
             self.feedback_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
             self.feedback_button.setFixedSize(50, 25)
-            # 反馈按钮圆角 8px
             self.feedback_button.setStyleSheet("border: 1px solid #292929; border-radius: 8px; padding: 0px;")
             self.feedback_button.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
             self.feedback_button.clicked.connect(self.on_feedback_clicked)
@@ -85,7 +82,6 @@ class ModernUIWindow(QMainWindow):
             self.manual_send_button = QPushButton("Send")
             self.manual_send_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
             self.manual_send_button.setFixedSize(50, 25)
-            # Send 按钮圆角 8px
             self.manual_send_button.setStyleSheet("border: 1px solid #292929; border-radius: 8px; padding: 0px;")
             self.manual_send_button.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
             self.manual_send_button.clicked.connect(self.on_manual_send)
@@ -109,8 +105,7 @@ class ModernUIWindow(QMainWindow):
             self.toggle_button = QPushButton()
             self.toggle_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
             self.setup_round_button(self.toggle_button, 50, 30, "#292929", extra_border="border: 2px solid #556070;")
-            # 普通模式下也用统一函数设置为激活（蓝色）状态
-            self.update_toggle_icon(True)
+            self.set_disabled_state()
             self.toggle_button.clicked.connect(self.toggle_recognition)
             self.toggle_button.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
             layout.addWidget(self.toggle_button)
@@ -138,25 +133,40 @@ class ModernUIWindow(QMainWindow):
         self.worker = None
         
         keyboard.add_hotkey('shift+alt+h', self.toggle_recognition)
-        # 修改 ESC 热键，采用延时退出方式避免跨线程问题
-        keyboard.add_hotkey('esc', lambda: QTimer.singleShot(100, self.exit_application))
+        # 修改 ESC 热键：按 ESC 隐藏窗口并暂停识别（不退出程序）
+        keyboard.add_hotkey('esc', lambda: QTimer.singleShot(100, self.on_esc_pressed))
         
-        # 使用指定图标作为系统托盘图标
         self.init_tray_icon()
         self.reposition_window()
 
+    # 统一状态切换方法
+    def set_active_state(self):
+        # 激活状态：蓝色背景 + 活跃麦克风图标
+        self.toggle_button.setIcon(QIcon("ms_mic_active.svg"))
+        btn_size = self.toggle_button.width() if self.toggle_button.width() > 0 else 60
+        radius = btn_size // 2
+        style = f"border-radius: {radius}px; background-color: #A4C2E9; padding: 4px;"
+        self.toggle_button.setStyleSheet(style)
+
+    def set_disabled_state(self):
+        # 非激活状态：灰色背景 + 非活跃麦克风图标
+        self.toggle_button.setIcon(QIcon("ms_mic_inactive.svg"))
+        btn_size = self.toggle_button.width() if self.toggle_button.width() > 0 else 60
+        radius = btn_size // 2
+        style = f"border-radius: {radius}px; background-color: #292929; padding: 4px;"
+        self.toggle_button.setStyleSheet(style)
+
     def update_toggle_icon(self, active: bool):
-        # 根据 active 状态设置麦克风图标，确保使用外部配置的图标文件
         if active:
-            self.toggle_button.setIcon(QIcon("ms_mic_active.svg"))
+            self.set_active_state()
         else:
-            self.toggle_button.setIcon(QIcon("ms_mic_inactive.svg"))
+            self.set_disabled_state()
 
     def eventFilter(self, obj, event):
-        # 在反馈模式下，当输入框获得焦点时暂停识别
         if obj == self.recognition_edit and event.type() == QEvent.Type.FocusIn:
             if self.worker and not self.worker.paused:
                 self.worker.pause()
+                self.set_disabled_state()
                 print("输入框获得焦点，暂停自动识别")
         return super().eventFilter(obj, event)
 
@@ -196,7 +206,7 @@ class ModernUIWindow(QMainWindow):
         if self.recognition_active and self.worker is not None:
             self.worker.pause()
             self.recognition_active = False
-            self.update_toggle_icon(False)
+            self.set_disabled_state()
         old_widget = self.centralWidget()
         if old_widget:
             old_widget.deleteLater()
@@ -214,8 +224,8 @@ class ModernUIWindow(QMainWindow):
             self.toggle_button = QPushButton()
             self.toggle_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
             self.setup_round_button(self.toggle_button, 30, 18, "#292929")
-            # 调用 update_toggle_icon 确保反馈模式图标为蓝色
-            self.update_toggle_icon(True)
+            # 反馈模式下初始化同样为非激活状态
+            self.set_disabled_state()
             self.toggle_button.clicked.connect(self.toggle_recognition)
             layout.addWidget(self.toggle_button)
             
@@ -254,7 +264,7 @@ class ModernUIWindow(QMainWindow):
             self.toggle_button = QPushButton()
             self.toggle_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
             self.setup_round_button(self.toggle_button, 50, 30, "#292929", extra_border="border: 2px solid #556070;")
-            self.update_toggle_icon(True)
+            self.set_disabled_state()
             self.toggle_button.clicked.connect(self.toggle_recognition)
             layout.addWidget(self.toggle_button)
             self.show()
@@ -287,7 +297,6 @@ class ModernUIWindow(QMainWindow):
 
     def init_tray_icon(self):
         self.tray_icon = QSystemTrayIcon(self)
-        # 使用指定图标作为托盘图标
         self.tray_icon.setIcon(QIcon("audio-melody-music-38-svgrepo-com.svg"))
         self.tray_icon.setToolTip("ASRInput by Cyletix")
         self.tray_menu = QMenu()
@@ -389,7 +398,8 @@ class ModernUIWindow(QMainWindow):
     def show_window_from_tray(self):
         self.show()
         self.raise_()
-        self.activateWindow()
+        # 移除 activateWindow() 以避免报错
+        # self.activateWindow()
         
     def process_text(self, text):
         text = text.strip()
@@ -409,11 +419,11 @@ class ModernUIWindow(QMainWindow):
         else:
             if hasattr(self.worker, 'paused') and self.worker.paused:
                 self.worker.resume()
-                self.update_toggle_icon(True)
+                self.set_active_state()
                 print("识别已恢复")
             else:
                 self.worker.pause()
-                self.update_toggle_icon(False)
+                self.set_disabled_state()
                 print("识别已暂停")
                 
     def start_worker(self):
@@ -434,13 +444,7 @@ class ModernUIWindow(QMainWindow):
     def on_worker_initialized(self):
         self.toggle_button.setEnabled(True)
         self.recognition_active = True
-        self.update_toggle_icon(True)
-        if self.config.get("accept_feedback", False):
-            self.setup_round_button(self.toggle_button, self.toggle_button.width(), 
-                                      self.toggle_button.iconSize().width(), "#A4C2E9")
-        else:
-            self.setup_round_button(self.toggle_button, self.toggle_button.width(), 
-                                      self.toggle_button.iconSize().width(), "#A4C2E9", extra_border="border: 2px solid #556070;")
+        self.set_active_state()
         print("识别已启动")
         
     def extract_emojis(self, text):
@@ -463,7 +467,10 @@ class ModernUIWindow(QMainWindow):
         self.log_recognition(processed)
         if self.config.get("accept_feedback", False):
             if not self.recognition_edit.hasFocus():
-                self.recognition_edit.setText(processed)
+                # 若已有内容则追加，而非直接覆盖
+                current = self.recognition_edit.text()
+                new_text = current + "\n" + processed if current else processed
+                self.recognition_edit.setText(new_text)
                 if self.auto_send_timer.isActive():
                     self.auto_send_timer.stop()
                 self.auto_send_timer.start(3000)
@@ -479,6 +486,7 @@ class ModernUIWindow(QMainWindow):
             if current_text and current_text != self.last_sent_text:
                 insert_text_into_active_window(current_text)
                 self.last_sent_text = current_text
+                self.recognition_edit.clear()
                 
     def on_manual_send(self):
         current_text = self.recognition_edit.text().strip()
@@ -512,6 +520,15 @@ class ModernUIWindow(QMainWindow):
         self.last_recognized_text = ""
         self.last_sent_text = ""
             
+    def on_esc_pressed(self):
+        # 隐藏窗口并暂停识别
+        if self.worker and not self.worker.paused:
+            self.worker.pause()
+            self.set_disabled_state()
+            print("识别已暂停")
+        self.hide()
+        print("窗口已隐藏到后台")
+
     def exit_application(self):
         self.exiting = True
         self.tray_icon.hide()

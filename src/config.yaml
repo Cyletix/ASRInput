@@ -1,15 +1,16 @@
-model_name: large
-language: zh
+model_name: large      # "small" "medium" "large"
+language: zh        # "en" "zh" "jp"
 device: cuda           # 或 "cpu"
-buffer_seconds: 1.5      # 缓冲时间，单位秒
-step_seconds: 0.5
-remove_trailing_period: true
-trailing_punctuation: ""
-punctuation_mode: "half"
-model_cache_path: "models"
-max_cache_count: 20
-cache_clear_interval: 10
+buffer_seconds: 8      # 缓冲时间，单位秒
+step_seconds: 0.5       # 步长，单位秒
+remove_trailing_period: true  # 是否去除句末句号
+trailing_punctuation: " " # 分隔符, 默认"。", 推荐" " 或 "" 或其他字符
+punctuation_mode: "half"  # "full" 或 "half"
+model_cache_path: "models"  # 模型缓存路径
+max_cache_count: 20         # 最大缓存模型数量
+cache_clear_interval: 10  # 缓存清理间隔，单位分钟
 recognize_emoji: false         # 是否识别表情（在后处理中使用）
 recognize_speaker: false      # 是否识别说话人
 accept_feedback: false        # 是否接受反馈
-feedback_path: "feedback"
+feedback_path: "feedback" 
+max_sentence_seconds: 1      # 最大句子长度，单位秒

@@ -1,16 +1,29 @@
 import time
 import numpy as np
 import re
+import os
 from funasr import AutoModel
 
-# 使用本地模型（前提是环境变量 TRANSFORMERS_CACHE 已正确设置）
+# 直接从环境变量获取 ASR 模型参数（由 main.py 中 prepare_models 写入）
+asr_model_param = os.environ.get("ASR_MODEL_DIR")
+if os.path.exists(asr_model_param):
+    local_files_only=True
+    disable_update=True
+    trust_remote_code=False
+
+else:
+    asr_model_param = "iic/SenseVoiceSmall"
+    local_files_only=False
+    disable_update=False
+    trust_remote_code=True
+
 model = AutoModel(
-    # model="iic/SenseVoiceSmall",
-    model="C:/Users/Administrator/.cache/modelscope/hub/iic/SenseVoiceSmall",
-    trust_remote_code=True,
-    # 如支持 local_files_only 参数，可加上 local_files_only=True
-    # local_files_only=True
+    model=asr_model_param,
+    local_files_only=local_files_only,
+    disable_update=disable_update,
+    trust_remote_code=trust_remote_code,
 )
+
 
 # 以下格式化函数取自 server.py 的实现，去掉无用标记
 emo_dict = {

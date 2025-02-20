@@ -1,7 +1,7 @@
-model_name: large      # "small" "medium" "large"
+model_name: small      # "small" "medium" "large"
 language: zh        # "en" "zh" "jp"
 device: cuda           # 或 "cpu"
-buffer_seconds: 8      # 缓冲时间，单位秒
+buffer_seconds: 2      # 缓冲时间，单位秒
 step_seconds: 0.5       # 步长，单位秒
 remove_trailing_period: true  # 是否去除句末句号
 trailing_punctuation: " " # 分隔符, 默认"。", 推荐" " 或 "" 或其他字符
@@ -13,4 +13,4 @@ recognize_emoji: false         # 是否识别表情（在后处理中使用）
 recognize_speaker: false      # 是否识别说话人
 accept_feedback: false        # 是否接受反馈
 feedback_path: "feedback" 
-max_sentence_seconds: 1      # 最大句子长度，单位秒
+max_sentence_seconds: 4      # 最大句子长度，单位秒

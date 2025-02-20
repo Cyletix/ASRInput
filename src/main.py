@@ -16,15 +16,15 @@ def load_config(config_path):
             "trailing_punctuation": "",
             "punctuation_mode": "half",
             "model_cache_path": "models",
-            "max_cache_count": 20,
+            "max_cache_count": 10,
             "cache_clear_interval": 10,
             "recognize_emoji": False,
             "recognize_speaker": False,
             "accept_feedback": False,
-            "vad_interval": 256,
+            "vad_interval": 512,
             "noise_threshold": 0.01,
             "max_sentence_seconds": 4,
-            "chunk": 1024
+            "chunk": 2048
         }
     with open(config_path, "r", encoding="utf-8") as f:
         return yaml.safe_load(f)
@@ -89,4 +89,12 @@ def main():
     sys.exit(app.exec())
 
 if __name__ == "__main__":
+    import sys
+    print(f"当前 Python 版本：{sys.version}")
+    import torch
+    print(f"PyTorch 版本：{torch.__version__}")
+    print(torch.cuda.is_available())
+
+    print(f"当前工作目录：{os.getcwd()}")
+    
     main()

@@ -7,7 +7,7 @@ from PyQt6.QtWidgets import (
     QApplication, QSystemTrayIcon, QMenu, QSizePolicy
 )
 from PyQt6.QtCore import Qt, QTimer, QSize, QEvent
-from PyQt6.QtGui import QMouseEvent, QGuiApplication, QIcon, QAction, QFocusEvent, QPixmap, QColor
+from PyQt6.QtGui import QMouseEvent, QGuiApplication, QIcon, QAction, QFocusEvent, QPixmap, QColor, QFontMetrics
 import keyboard  # 使用 keyboard 库
 from asr_core import emo_set  # 用于提取表情
 
@@ -56,7 +56,7 @@ class ModernUIWindow(QMainWindow):
             
             self.toggle_button = QPushButton()
             self.setup_round_button(self.toggle_button, 60, 36, "#292929")
-            # 初始化为非激活状态：灰色图标
+            # 反馈模式下初始为非激活状态：灰色图标
             self.set_disabled_state()
             self.toggle_button.clicked.connect(self.toggle_recognition)
             self.toggle_button.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
@@ -69,6 +69,7 @@ class ModernUIWindow(QMainWindow):
             self.recognition_edit.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
             self.recognition_edit.setStyleSheet("border: 1px solid #292929; border-bottom: 2px solid #7886C7; border-radius: 8px; padding: 0px;")
             layout.addWidget(self.recognition_edit, stretch=1)
+            # 当输入框获得焦点时暂停识别
             self.recognition_edit.installEventFilter(self)
             
             self.feedback_button = QPushButton("反馈")
@@ -116,7 +117,7 @@ class ModernUIWindow(QMainWindow):
         self.last_sent_text = ""
         
         self.remove_trailing_period = self.config.get("remove_trailing_period", True)
-        self.trailing_punctuation = self.config.get("trailing_punctuation", "")
+        self.trailing_punctuation = self.config.get("trailing_punctuation", " ")  # 默认使用空格分隔
         self.punctuation_mode = self.config.get("punctuation_mode", "half")
         
         self.auto_send_timer = QTimer(self)
@@ -139,9 +140,8 @@ class ModernUIWindow(QMainWindow):
         self.init_tray_icon()
         self.reposition_window()
 
-    # 统一状态切换方法
+    # 统一状态切换方法（保持原样）
     def set_active_state(self):
-        # 激活状态：蓝色背景 + 活跃麦克风图标
         self.toggle_button.setIcon(QIcon("ms_mic_active.svg"))
         btn_size = self.toggle_button.width() if self.toggle_button.width() > 0 else 60
         radius = btn_size // 2
@@ -149,7 +149,6 @@ class ModernUIWindow(QMainWindow):
         self.toggle_button.setStyleSheet(style)
 
     def set_disabled_state(self):
-        # 非激活状态：灰色背景 + 非活跃麦克风图标
         self.toggle_button.setIcon(QIcon("ms_mic_inactive.svg"))
         btn_size = self.toggle_button.width() if self.toggle_button.width() > 0 else 60
         radius = btn_size // 2
@@ -190,6 +189,14 @@ class ModernUIWindow(QMainWindow):
         else:
             super().focusInEvent(event)
 
+    def focusOutEvent(self, event: QFocusEvent):
+        # 当窗口失去焦点时暂停识别
+        if self.worker and not self.worker.paused:
+            self.worker.pause()
+            self.set_disabled_state()
+            print("窗口失去焦点，识别已暂停")
+        super().focusOutEvent(event)
+
     def focusNextPrevChild(self, next: bool) -> bool:
         if not self.config.get("accept_feedback", False):
             return False
@@ -224,8 +231,7 @@ class ModernUIWindow(QMainWindow):
             self.toggle_button = QPushButton()
             self.toggle_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
             self.setup_round_button(self.toggle_button, 30, 18, "#292929")
-            # 反馈模式下初始化同样为非激活状态
-            self.set_disabled_state()
+            self.set_disabled_state()  # 反馈模式下初始化同样为非激活状态
             self.toggle_button.clicked.connect(self.toggle_recognition)
             layout.addWidget(self.toggle_button)
             
@@ -269,6 +275,18 @@ class ModernUIWindow(QMainWindow):
             layout.addWidget(self.toggle_button)
             self.show()
         self.reposition_window()
+
+    def update_feedback_ui(self):
+        """根据反馈文本内容自动调整窗口宽度"""
+        if self.config.get("accept_feedback", False):
+            fm = self.recognition_edit.fontMetrics()
+            text = self.recognition_edit.text()
+            new_width = fm.horizontalAdvance(text) + 30  # 加上左右边距
+            min_width = 400
+            if new_width < min_width:
+                new_width = min_width
+            self.setFixedWidth(new_width)
+            self.reposition_window()
 
     def closeEvent(self, event):
         if self.exiting:
@@ -398,8 +416,6 @@ class ModernUIWindow(QMainWindow):
     def show_window_from_tray(self):
         self.show()
         self.raise_()
-        # 移除 activateWindow() 以避免报错
-        # self.activateWindow()
         
     def process_text(self, text):
         text = text.strip()
@@ -432,7 +448,7 @@ class ModernUIWindow(QMainWindow):
             sample_rate=16000,
             chunk=self.config.get("chunk", 256),
             buffer_seconds=self.config.get("buffer_seconds", 2),
-            device=self.config.get("device", "cpu"),
+            device=self.config.get("device", "cuda"),
             config=self.config
         )
         self.worker.result_ready.connect(self.on_new_recognition)
@@ -467,15 +483,27 @@ class ModernUIWindow(QMainWindow):
         self.log_recognition(processed)
         if self.config.get("accept_feedback", False):
             if not self.recognition_edit.hasFocus():
-                # 若已有内容则追加，而非直接覆盖
                 current = self.recognition_edit.text()
-                new_text = current + "\n" + processed if current else processed
+                # 如果已有文本且末尾不包含预设分隔符，则先补上
+                if current and not current.rstrip().endswith(self.trailing_punctuation):
+                    current += self.trailing_punctuation
+                # 反馈模式下使用 trailing_punctuation 作为唯一分隔符（不使用换行符）
+                new_text = current + processed if current else processed
                 self.recognition_edit.setText(new_text)
+                self.update_feedback_ui()
                 if self.auto_send_timer.isActive():
                     self.auto_send_timer.stop()
                 self.auto_send_timer.start(3000)
         else:
             insert_text_into_active_window(processed)
+    
+    def focusOutEvent(self, event: QFocusEvent):
+        # 当窗口失去焦点时暂停识别
+        if self.worker and not self.worker.paused:
+            self.worker.pause()
+            self.set_disabled_state()
+            print("窗口失去焦点，识别已暂停")
+        super().focusOutEvent(event)
             
     def auto_send(self):
         if self.recognition_edit and self.recognition_edit.hasFocus():
@@ -495,6 +523,7 @@ class ModernUIWindow(QMainWindow):
                 self.hide()
                 QTimer.singleShot(100, lambda: (insert_text_into_active_window(current_text), self.show()))
                 self.last_sent_text = current_text
+            self.recognition_edit.clear()   # 发送后清空输入框
         else:
             print("没有文本可上屏。")
             
@@ -502,15 +531,15 @@ class ModernUIWindow(QMainWindow):
         if not self.config.get("accept_feedback", False):
             print("反馈功能已禁用。")
             return
-        current_text = self.recognition_edit.text().strip()
-        if not current_text:
+        current = self.recognition_edit.text().strip()
+        if not current:
             print("反馈：没有内容。")
             return
         audio_filename = self.worker.save_feedback_audio(self.last_audio_id)
         feedback = {
             "audio_filename": audio_filename,
             "original": self.last_recognized_text,
-            "modified": current_text
+            "modified": current
         }
         with open("feedback.json", "a", encoding="utf-8") as f:
             json.dump(feedback, f, ensure_ascii=False)

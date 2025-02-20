@@ -18,27 +18,34 @@ class ASRWorkerThread(QThread):
     # 初始化完成信号，用于通知 UI 层停止加载动画
     initialized = pyqtSignal()
 
-    def __init__(self, sample_rate=16000, chunk=1024, buffer_seconds=8,
-                 device="cpu", config=None, parent=None):
+    def __init__(self, sample_rate=8192, chunk=1024, buffer_seconds=8,
+                 device="cuda", config=None, parent=None):
         super().__init__(parent)
         self.config = config if config is not None else {}
-        # 从配置中读取参数（未配置则使用默认值）
+        # 读取配置参数
         self.sample_rate = self.config.get("sample_rate", sample_rate)
         self.chunk = self.config.get("chunk", chunk)
         self.buffer_seconds = self.config.get("buffer_seconds", buffer_seconds)
         self.device = self.config.get("device", device)
-        # 这里不再用固定时间强制输出，全部依赖 VAD 分割
-        # self.max_sentence_seconds = self.config.get("max_sentence_seconds", 1)
         self.running = True
 
-        # 保存识别成功但尚未反馈的音频数据： audio_id -> numpy array
-        self.recognized_audio = {}
-        self.max_cache_count = self.config.get("max_cache_count", 20)
+        # 根据反馈模式设置不同的处理路径，避免循环中每次判断
+        self.accept_feedback = self.config.get("accept_feedback", False)
+        if self.accept_feedback:
+            self.recognized_audio = {}
+        else:
+            self.recognized_audio = None
+        # 定时清理缓存参数，仅在反馈模式下有意义
         self.cache_clear_interval = self.config.get("cache_clear_interval", 10)
         self.last_cache_clear_time = _time.time()
+        # 根据反馈模式设置处理函数
+        if self.accept_feedback:
+            self.process_result = self._process_result_feedback
+        else:
+            self.process_result = self._process_result_no_feedback
 
-        # VAD 参数，从配置中读取（单位毫秒），默认256
-        self.vad_chunk_ms = self.config.get("vad_interval", 256)
+        # VAD 参数，从配置中读取（单位毫秒），默认512ms
+        self.vad_chunk_ms = self.config.get("vad_interval", 512)
         self.vad_chunk_samples = int(self.sample_rate * self.vad_chunk_ms / 1000)
 
         # 噪声阈值
@@ -49,13 +56,14 @@ class ASRWorkerThread(QThread):
             cache_dir = self.config.get("model_cache_path")
             os.makedirs(cache_dir, exist_ok=True)
 
+        # 打开录音流
         self.pa = pyaudio.PyAudio()
         self.stream = self.pa.open(format=pyaudio.paInt16,
                                    channels=1,
                                    rate=self.sample_rate,
                                    input=True,
                                    frames_per_buffer=self.chunk)
-        
+
         # 获取 VAD 模型参数，从环境变量中读取 VAD_MODEL_DIR
         vad_model_param = os.environ.get("VAD_MODEL_DIR")
         if os.path.exists(vad_model_param):
@@ -82,13 +90,30 @@ class ASRWorkerThread(QThread):
             device=self.device
         )
         self.cache_vad = {}
-        # 初始化完成信号在 run() 中发出
-        self.paused = False  # 新增暂停标志
+
+        # 暂停标志
+        self.paused = False
+
+    def _process_result_feedback(self, segment_audio):
+        """反馈模式下：存储音频并定时清理缓存，返回生成的 audio_id"""
+        audio_id = str(int(_time.time() * 1000))
+        self.recognized_audio[audio_id] = segment_audio
+        if _time.time() - self.last_cache_clear_time > self.cache_clear_interval:
+            self.recognized_audio.clear()
+            self.last_cache_clear_time = _time.time()
+        return audio_id
+
+    def _process_result_no_feedback(self, segment_audio):
+        """非反馈模式下，不存储音频，返回空 audio_id"""
+        return ""
 
     def run(self):
         self.initialized.emit()
-        audio_buffer = np.array([], dtype=np.float32)
-        vad_buffer = np.array([], dtype=np.float32)
+        # 使用列表存储采集到的音频数据，避免频繁使用 np.concatenate
+        audio_buffer_list = []
+        # 用于存储待处理的 VAD 数据块
+        vad_buffer_list = []
+
         offset = 0
         last_vad_beg = -1
         last_vad_end = -1
@@ -96,24 +121,42 @@ class ASRWorkerThread(QThread):
         silence_counter = 0
         required_silence_count = 1  # 可加入配置调整
 
-        # 仅依赖 VAD 分割，不再使用固定时间强制输出
         while self.running:
             if self.paused:
                 _time.sleep(0.1)
                 continue
             try:
-                data = self.stream.read(self.chunk)
+                # 读取音频数据，使用 exception_on_overflow=False 防止异常
+                data = self.stream.read(self.chunk, exception_on_overflow=False)
             except Exception as e:
                 print(f"录音读取错误: {e}")
                 continue
 
             samples = np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32767.0
-            audio_buffer = np.concatenate((audio_buffer, samples))
+            audio_buffer_list.append(samples)
+            total_length = sum(arr.shape[0] for arr in audio_buffer_list)
 
-            while len(audio_buffer) >= self.vad_chunk_samples:
-                current_chunk = audio_buffer[:self.vad_chunk_samples]
-                audio_buffer = audio_buffer[self.vad_chunk_samples:]
-                vad_buffer = np.concatenate((vad_buffer, current_chunk))
+            # 当缓冲区内采样点达到一个 VAD 分块时进行处理
+            while total_length >= self.vad_chunk_samples:
+                needed = self.vad_chunk_samples
+                collected = []
+                collected_len = 0
+                while audio_buffer_list and collected_len < needed:
+                    arr = audio_buffer_list.pop(0)
+                    collected.append(arr)
+                    collected_len += arr.shape[0]
+                segment = np.concatenate(collected)
+                current_chunk = segment[:needed]
+                remainder = segment[needed:]
+                if remainder.size > 0:
+                    audio_buffer_list.insert(0, remainder)
+                total_length = sum(arr.shape[0] for arr in audio_buffer_list)
+
+                # 将当前块添加到 VAD 缓冲区
+                vad_buffer_list.append(current_chunk)
+                vad_buffer = np.concatenate(vad_buffer_list) if vad_buffer_list else np.array([], dtype=np.float32)
+
+                # 调用 VAD 模型处理当前块
                 res = self.model_vad.generate(
                     input=current_chunk,
                     cache=self.cache_vad,
@@ -122,11 +165,11 @@ class ASRWorkerThread(QThread):
                 )
                 if res and "value" in res[0] and len(res[0]["value"]) > 0:
                     vad_segments = res[0]["value"]
-                    for segment in vad_segments:
-                        if segment[0] > -1:
-                            last_vad_beg = segment[0]
-                        if segment[1] > -1:
-                            last_vad_end = segment[1]
+                    for segment_val in vad_segments:
+                        if segment_val[0] > -1:
+                            last_vad_beg = segment_val[0]
+                        if segment_val[1] > -1:
+                            last_vad_end = segment_val[1]
                     if last_vad_beg > -1 and last_vad_end > -1:
                         silence_counter += 1
                     else:
@@ -135,11 +178,12 @@ class ASRWorkerThread(QThread):
                     if silence_counter >= required_silence_count:
                         beg = int((last_vad_beg - offset) * self.sample_rate / 1000)
                         end = int((last_vad_end - offset) * self.sample_rate / 1000)
-                        if end > beg and end <= len(vad_buffer):
+                        if end > beg and end <= vad_buffer.shape[0]:
                             segment_audio = vad_buffer[beg:end]
                             rms = np.sqrt(np.mean(segment_audio**2))
                             if rms < self.noise_threshold:
                                 vad_buffer = vad_buffer[end:]
+                                vad_buffer_list = [vad_buffer] if vad_buffer.size > 0 else []
                                 offset = last_vad_end
                                 last_vad_beg = -1
                                 last_vad_end = -1
@@ -153,27 +197,21 @@ class ASRWorkerThread(QThread):
                                     text = ""
                                 else:
                                     text = f"识别错误: {e}"
+                            # 处理识别结果，如果文本变化且非空
                             if text and text.strip() and text != last_text:
                                 last_text = text
-                                if self.config.get("accept_feedback", False):
-                                    audio_id = str(int(_time.time() * 1000))
-                                    self.recognized_audio[audio_id] = segment_audio
-                                else:
-                                    audio_id = ""
+                                # 根据不同模式调用不同处理函数（避免每轮 if 判断）
+                                audio_id = self.process_result(segment_audio)
                                 self.result_ready.emit(text, audio_id)
-                                if len(self.recognized_audio) > self.max_cache_count:
-                                    oldest_key = next(iter(self.recognized_audio))
-                                    del self.recognized_audio[oldest_key]
+                            # 清除已处理的 VAD 缓冲区数据
                             vad_buffer = vad_buffer[end:]
+                            vad_buffer_list = [vad_buffer] if vad_buffer.size > 0 else []
                             offset = last_vad_end
                         last_vad_beg = -1
                         last_vad_end = -1
                         silence_counter = 0
 
-            if _time.time() - self.last_cache_clear_time > self.cache_clear_interval:
-                self.recognized_audio.clear()
-                self.last_cache_clear_time = _time.time()
-            _time.sleep(0.01)
+            _time.sleep(0.05)  # 调整 sleep 时间，平衡 CPU 占用和实时性
 
     def stop(self):
         self.running = False
@@ -187,7 +225,7 @@ class ASRWorkerThread(QThread):
         self.quit()
 
     def save_feedback_audio(self, audio_id):
-        if audio_id not in self.recognized_audio:
+        if self.recognized_audio is None or audio_id not in self.recognized_audio:
             return ""
         if not os.path.exists("feedback_audio"):
             os.makedirs("feedback_audio")

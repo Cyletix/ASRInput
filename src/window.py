@@ -1,11 +1,11 @@
 import os
 import json
 import time
-import re
-from PyQt6.QtWidgets import QMainWindow, QWidget, QHBoxLayout, QLineEdit, QPushButton, QApplication
-from PyQt6.QtCore import Qt, QTimer
-from PyQt6.QtGui import QMouseEvent, QGuiApplication, QKeyEvent
-import keyboard  # 使用 keyboard 库
+from PyQt6.QtWidgets import (QMainWindow, QWidget, QHBoxLayout, QLineEdit, QPushButton, 
+                             QApplication, QSystemTrayIcon, QMenu)
+from PyQt6.QtCore import Qt, QTimer, QEvent
+from PyQt6.QtGui import QMouseEvent, QGuiApplication, QKeyEvent, QAction
+import keyboard
 
 def insert_text_into_active_window(text):
     try:
@@ -13,25 +13,44 @@ def insert_text_into_active_window(text):
     except Exception as e:
         clipboard = QGuiApplication.clipboard()
         clipboard.setText(text)
-        print("keyboard.write 失败，文本已复制到剪贴板，请手动粘贴。", e)
 
 class ModernUIWindow(QMainWindow):
     def __init__(self, config_dict):
         super().__init__()
         self.config = config_dict
         self.setWindowTitle("语音识别悬浮窗口")
-        # 使用无边框工具窗口，始终置顶且不抢焦点
+        
         self.setWindowFlags(Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
         self.setWindowOpacity(0.85)
-        self.resize(500, 40)
+        self.resize(550, 45)
 
-        # 添加最外层边框（仅加边框和圆角，不修改背景颜色）
         self.setObjectName("MainWindow")
         self.setStyleSheet("""
         #MainWindow {
-            border: 1px solid #cccccc;
+            border: 1px solid #555555;
             border-radius: 8px;
+            background-color: #2b2b2b;
+        }
+        QLineEdit {
+            border: 1px solid #555555;
+            border-radius: 4px;
+            padding: 2px;
+            background: #3b3b3b;
+            color: #ffffff;
+            selection-background-color: #505050;
+        }
+        QPushButton {
+            background-color: #4b4b4b;
+            border: 1px solid #555555;
+            border-radius: 4px;
+            color: #ffffff;
+        }
+        QPushButton:hover {
+            background-color: #5b5b5b;
+        }
+        QPushButton:pressed {
+            background-color: #3b3b3b;
         }
         """)
 
@@ -41,161 +60,203 @@ class ModernUIWindow(QMainWindow):
         layout.setContentsMargins(5, 5, 5, 5)
         layout.setSpacing(5)
 
-        # 麦克风按钮
         self.toggle_button = QPushButton("🎤")
-        self.toggle_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.toggle_button.setFixedSize(40, 30)
-        self.toggle_button.setStyleSheet("background-color: lightgreen; border-radius: 5px;")
+        self.toggle_button.setStyleSheet("background-color: #4CAF50; border: none; border-radius: 4px; color: white;")
         self.toggle_button.clicked.connect(self.toggle_recognition)
         layout.addWidget(self.toggle_button)
 
-        # 文本框显示识别内容
         self.recognition_edit = QLineEdit()
         self.recognition_edit.setPlaceholderText("等待识别...")
-        self.recognition_edit.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.recognition_edit.setFixedHeight(30)
+        self.recognition_edit.installEventFilter(self)
         layout.addWidget(self.recognition_edit, stretch=1)
 
-        # 反馈按钮
         self.feedback_button = QPushButton("反馈")
-        self.feedback_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.feedback_button.setFixedSize(60, 30)
+        self.feedback_button.setFixedSize(50, 30)
         self.feedback_button.clicked.connect(self.on_feedback_clicked)
         layout.addWidget(self.feedback_button)
 
-        # 上屏按钮
         self.manual_send_button = QPushButton("上屏")
-        self.manual_send_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.manual_send_button.setFixedSize(60, 30)
+        self.manual_send_button.setFixedSize(50, 30)
         self.manual_send_button.clicked.connect(self.on_manual_send)
         layout.addWidget(self.manual_send_button)
 
         self.last_recognized_text = ""
         self.last_audio_id = ""
         self.last_sent_text = ""
+        self.recognition_active = True
+        self._startPos = None
+        self.is_editing = False
 
-        self.remove_trailing_period = self.config.get("remove_trailing_period", True)
-        self.trailing_punctuation = self.config.get("trailing_punctuation", "")
-        self.punctuation_mode = self.config.get("punctuation_mode", "half")
+        # === 自动上屏定时器 ===
+        self.auto_send_timer = QTimer()
+        self.auto_send_timer.setSingleShot(True)
+        self.auto_send_timer.timeout.connect(self.trigger_auto_send)
+        # 默认 3 秒
+        self.auto_send_delay = self.config.get("auto_send_delay", 3) * 1000 
+
+        self.init_tray_icon()
 
         from worker_thread import ASRWorkerThread
         self.worker = ASRWorkerThread(
             sample_rate=16000,
-            chunk=2048,
-            buffer_seconds=self.config.get("buffer_seconds", 8),
-            device=self.config.get("device", "cpu"),
             config=self.config
         )
         self.worker.result_ready.connect(self.on_new_recognition)
         self.worker.start()
-        self.recognition_active = True
 
-        keyboard.add_hotkey('ctrl+shift+h', self.toggle_recognition)
-
-        self._startPos = None
-
-        # 设置窗口位置为屏幕底部居中
+        try:
+            keyboard.add_hotkey('ctrl+shift+h', self.toggle_recognition)
+        except:
+            print("Hotkey failed to register.")
+        
         screen = QGuiApplication.primaryScreen()
         if screen:
-            geometry = screen.availableGeometry()
-            x = (geometry.width() - self.width()) // 2
-            y = geometry.height() - self.height() - 10
-            self.move(x, y)
+            geo = screen.availableGeometry()
+            self.move((geo.width()-self.width())//2, geo.height()-self.height()-50)
 
-    def process_text(self, text):
-        text = text.strip()
-        if self.remove_trailing_period and text:
-            if self.punctuation_mode == "half":
-                text = re.sub(r'[.]+$', '', text)
-            elif self.punctuation_mode == "full":
-                text = re.sub(r'[。]+$', '', text)
-        return text
+    def init_tray_icon(self):
+        self.tray_icon = QSystemTrayIcon(self)
+        self.tray_icon.setIcon(self.style().standardIcon(QApplication.style().StandardPixmap.SP_MediaPlay))
+        menu = QMenu()
+        show_action = QAction("显示/隐藏", self)
+        show_action.triggered.connect(self.toggle_visibility)
+        quit_action = QAction("退出", self)
+        quit_action.triggered.connect(self.quit_app)
+        menu.addAction(show_action)
+        menu.addAction(quit_action)
+        self.tray_icon.setContextMenu(menu)
+        self.tray_icon.show()
+        self.tray_icon.activated.connect(self.on_tray_activated)
+
+    def toggle_visibility(self):
+        if self.isVisible(): self.hide()
+        else: 
+            self.show()
+            self.activateWindow()
+
+    def on_tray_activated(self, reason):
+        if reason == QSystemTrayIcon.ActivationReason.DoubleClick:
+            self.toggle_visibility()
+
+    def quit_app(self):
+        self.worker.stop()
+        QApplication.quit()
+
+    # === 事件过滤器：检测是否进入编辑模式 ===
+    def eventFilter(self, source, event):
+        if source == self.recognition_edit:
+            if event.type() == QEvent.Type.FocusIn:
+                if self.recognition_active and not self.worker.paused:
+                    print(">>> Focus detected: Entering edit mode, cancelling auto-send.")
+                    self.is_editing = True
+                    self.worker.pause()
+                    self.auto_send_timer.stop() # 只要一点进去，立刻停止倒计时
+                    self.recognition_edit.setStyleSheet("border: 2px solid orange; color: white; background: #3b3b3b;")
+        return super().eventFilter(source, event)
+
+    # === 收到新识别结果 ===
+    def on_new_recognition(self, text, audio_id):
+        # 如果正在编辑，别打扰用户
+        if self.worker.paused or self.is_editing:
+            return
+
+        # 1. 先显示在框里
+        self.recognition_edit.setText(text)
+        self.last_recognized_text = text
+        self.last_audio_id = audio_id
+        
+        # 2. 启动 3秒 倒计时
+        if text.strip():
+            print(f"Recognized: '{text}'. Waiting {self.auto_send_delay/1000}s...")
+            # 如果用户一直在说话，重置计时器
+            self.auto_send_timer.start(self.auto_send_delay) 
+
+    # === 计时器结束：自动上屏 ===
+    def trigger_auto_send(self):
+        if not self.is_editing and not self.worker.paused:
+            text = self.recognition_edit.text().strip()
+            if text:
+                print(">>> Timer expired: Auto-typing.")
+                insert_text_into_active_window(text)
+                self.last_sent_text = text
+                
+                # === 修正：自动上屏后清空文本框 ===
+                self.recognition_edit.clear() 
+                # ==============================
+
+    # === 手动点击上屏按钮 ===
+    def on_manual_send(self):
+        self.auto_send_timer.stop() # 防止重复
+        text = self.recognition_edit.text().strip()
+        
+        if text:
+            self.hide() 
+            QTimer.singleShot(100, lambda: self._do_paste_and_resume(text))
+        else:
+            self.resume_recognition_state()
+
+    def _do_paste_and_resume(self, text):
+        insert_text_into_active_window(text)
+        self.last_sent_text = text
+        self.show()
+        # 手动上屏也要清空
+        self.recognition_edit.clear()
+        self.resume_recognition_state()
+
+    def resume_recognition_state(self):
+        print("<<< Resuming recognition.")
+        self.is_editing = False
+        self.worker.resume()
+        self.recognition_edit.setStyleSheet("border: 1px solid #555555; color: white; background: #3b3b3b;")
+
+    def on_feedback_clicked(self):
+        self.auto_send_timer.stop()
+        current_text = self.recognition_edit.text().strip()
+        if not current_text: return
+        
+        filename = self.worker.save_feedback_audio(self.last_audio_id)
+        if filename:
+            feedback = {
+                "audio_filename": filename,
+                "original": self.last_recognized_text,
+                "modified": current_text
+            }
+            with open("feedback.json", "a", encoding="utf-8") as f:
+                json.dump(feedback, f, ensure_ascii=False)
+                f.write("\n")
+            print(f"Feedback saved: {filename}")
+            
+            self.recognition_edit.clear()
+            self.resume_recognition_state()
 
     def toggle_recognition(self):
         if self.recognition_active:
             self.worker.stop()
-            self.worker.wait()
+            self.auto_send_timer.stop()
             self.recognition_active = False
             self.toggle_button.setText("🚫")
-            self.toggle_button.setStyleSheet("background-color: lightcoral; border-radius: 5px;")
-            print("识别已停止")
+            self.toggle_button.setStyleSheet("background-color: #F44336; border: none; border-radius: 4px; color: white;")
         else:
             from worker_thread import ASRWorkerThread
-            self.worker = ASRWorkerThread(
-                sample_rate=16000,
-                chunk=2048,
-                buffer_seconds=self.config.get("buffer_seconds", 8),
-                device=self.config.get("device", "cpu"),
-                config=self.config
-            )
+            self.worker = ASRWorkerThread(sample_rate=16000, config=self.config)
             self.worker.result_ready.connect(self.on_new_recognition)
             self.worker.start()
             self.recognition_active = True
             self.toggle_button.setText("🎤")
-            self.toggle_button.setStyleSheet("background-color: lightgreen; border-radius: 5px;")
-            print("识别已启动")
+            self.toggle_button.setStyleSheet("background-color: #4CAF50; border: none; border-radius: 4px; color: white;")
 
-    def on_new_recognition(self, recognized_text, audio_id):
-        processed = self.process_text(recognized_text)
-        if processed and processed != self.last_sent_text:
-            insert_text_into_active_window(processed)
-            self.last_sent_text = processed
-        self.last_recognized_text = processed
-        self.last_audio_id = audio_id
-        self.recognition_edit.setText(processed)
-
-    def on_manual_send(self):
-        current_text = self.recognition_edit.text().strip()
-        if current_text:
-            if current_text != self.last_sent_text:
-                self.hide()
-                QTimer.singleShot(100, lambda: (insert_text_into_active_window(current_text), self.show()))
-                self.last_sent_text = current_text
-        else:
-            print("没有文本可上屏。")
-
-    def on_feedback_clicked(self):
-        current_text = self.recognition_edit.text().strip()
-        if not current_text:
-            print("反馈：没有内容。")
-            return
-        audio_filename = self.worker.save_feedback_audio(self.last_audio_id)
-        feedback = {
-            "audio_filename": audio_filename,
-            "original": self.last_recognized_text,
-            "modified": current_text
-        }
-        with open("feedback.json", "a", encoding="utf-8") as f:
-            json.dump(feedback, f, ensure_ascii=False)
-            f.write("\n")
-        print("反馈已保存：", feedback)
-        self.recognition_edit.clear()
-        self.last_recognized_text = ""
-        self.last_sent_text = ""
-
-    def keyPressEvent(self, event: QKeyEvent):
-        if event.key() == Qt.Key.Key_Escape:
-            self.close()
-        else:
-            super().keyPressEvent(event)
-
-    def mousePressEvent(self, event: QMouseEvent):
+    def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
             self._startPos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
-            event.accept()
-
-    def mouseMoveEvent(self, event: QMouseEvent):
-        if self._startPos is not None and event.buttons() == Qt.MouseButton.LeftButton:
+    def mouseMoveEvent(self, event):
+        if self._startPos and event.buttons() == Qt.MouseButton.LeftButton:
             self.move(event.globalPosition().toPoint() - self._startPos)
-            event.accept()
-
-    def mouseReleaseEvent(self, event: QMouseEvent):
+    def mouseReleaseEvent(self, event):
         self._startPos = None
-        event.accept()
 
     def closeEvent(self, event):
-        if self.recognition_active:
-            self.worker.stop()
-            self.worker.wait()
-        QApplication.quit()
-        super().closeEvent(event)
+        event.ignore()
+        self.hide()
+        self.tray_icon.showMessage("提示", "已最小化到托盘", QSystemTrayIcon.MessageIcon.Information, 1000)

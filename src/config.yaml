@@ -1,11 +1,17 @@
-model_name: large
+model_name: small
 language: zh
-device: cuda  # 或 "cpu"
-buffer_seconds: 8
-step_seconds: 2
-remove_trailing_period: true
-trailing_punctuation: ""   # 留空表示删除
-punctuation_mode: "half"     # 或 "full"
-model_cache_path: "models"
-max_cache_count: 20
-cache_clear_interval: 10
+device: cuda
+sample_rate: 16000
+buffer_seconds: 4      # Optimized for responsiveness
+noise_threshold: 0.002 # Silence threshold
+
+# === Auto-Send Delay ===
+# Time in seconds to wait before auto-typing.
+# If you click the edit box during this time, auto-typing is cancelled.
+auto_send_delay: 3
+
+# === Local Model Paths ===
+# MUST use double backslashes "\\" for Windows paths.
+# If these paths are empty or incorrect, it WILL download from cloud.
+local_asr_path: "D:\\GitHub\\ASRInput\\models\\iic\\SenseVoiceSmall"
+local_vad_path: "D:\\GitHub\\ASRInput\\models\\iic\\speech_fsmn_vad_zh-cn-16k-common-pytorch"

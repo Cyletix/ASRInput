@@ -2,6 +2,9 @@ import sys
 import os
 import yaml
 from PyQt6.QtWidgets import QApplication
+import logging
+
+logging.getLogger().setLevel(logging.ERROR)
 
 def load_config(config_path):
     if not os.path.exists(config_path):

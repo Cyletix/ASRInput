@@ -98,30 +98,42 @@ class ASRWorkerThread(QThread):
         # 发送初始化完成信号
         self.initialized.emit()
 
-        audio_buffer = np.array([], dtype=np.float32)
+        # === 核心变量初始化 ===
+        # 使用单一的 numpy array 替代 list，避免复杂的拼接逻辑错误
         vad_buffer = np.array([], dtype=np.float32)
-        vad_buffer_list = [] # 使用 list 暂存，避免频繁 concat 降低性能
         
         offset = 0
         last_vad_beg = -1
         last_vad_end = -1
         last_text = ""
         silence_counter = 0
-        required_silence_count = 1
+
+        pause_delay = self.config.get("vad_pause_delay", 0.8)
+        chunk_sec = self.vad_chunk_ms / 1000.0
+        
+        # 自动计算需要几个块 (至少 1 个)
+        required_silence_count = max(1, int(pause_delay / chunk_sec))
+        
+        # === [关键修正 1] 强制设定最小安全缓冲时间 ===
+        # 无论配置文件写 2秒 还是 3秒，这里强制至少 6秒 才会触发硬切
+        # 这是为了防止 "死循环"（切分->识别卡顿->积压录音->瞬间又满->切分）
+        cfg_buffer = self.config.get("buffer_seconds", 6)
+        FORCE_CUT_LIMIT = max(float(cfg_buffer), 4.0)
+        print(f"✅ 安全缓冲策略: 阈值已修正为 {FORCE_CUT_LIMIT}秒 (配置值: {cfg_buffer}s)")
 
         while self.running:
             # === 暂停状态处理 ===
             if self.paused:
                 try:
-                    # 必须读出数据并丢弃，防止硬件缓冲区溢出
                     self.stream.read(self.chunk, exception_on_overflow=False)
                 except:
                     pass
                 _time.sleep(0.02)
                 continue
 
-            # === 正常录音 ===
+            # === 录音读取 ===
             try:
+                # 这一步可能会因为上次识别卡顿而一次性读出大量数据
                 data = self.stream.read(self.chunk, exception_on_overflow=False)
             except Exception as e:
                 print(f"录音读取错误: {e}")
@@ -129,19 +141,21 @@ class ASRWorkerThread(QThread):
 
             # 转为 float32
             samples = np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32767.0
-            audio_buffer = np.concatenate((audio_buffer, samples))
+            
+            # 直接拼接，逻辑更简单
+            vad_buffer = np.concatenate((vad_buffer, samples))
 
-            # === VAD 处理循环 ===
-            while len(audio_buffer) >= self.vad_chunk_samples:
-                current_chunk = audio_buffer[:self.vad_chunk_samples]
-                audio_buffer = audio_buffer[self.vad_chunk_samples:]
+            # === VAD 处理 (处理最新的部分) ===
+            # 我们只需要对新进来的数据或者缓冲区末尾进行 VAD 检查
+            # 为了性能，我们只把未处理的末尾拿去给 VAD 模型看
+            # 但 FunASR VAD 需要连续性，所以这里简化：只在缓冲区积累了一定长度后检测
+            
+            # 只有当缓冲区足够长时才进行复杂的 VAD 运算，节省 CPU
+            if len(vad_buffer) > self.vad_chunk_samples:
+                # 为了不重复计算，这里其实应该维护一个指针，但为了逻辑最简，我们只取最后一段
+                # 注意：这里仅用于检测静音，不用于切分音频流，切分逻辑在下面
+                current_chunk = vad_buffer[-self.vad_chunk_samples:]
                 
-                # 放入 VAD 缓冲区
-                vad_buffer_list.append(current_chunk)
-                # 临时合并用于计算 (优化点：其实可以只在切分时合并，但为了逻辑清晰先这样)
-                vad_buffer = np.concatenate(vad_buffer_list) if vad_buffer_list else np.array([], dtype=np.float32)
-                
-                # VAD 推理
                 try:
                     res = self.model_vad.generate(
                         input=current_chunk, 
@@ -150,7 +164,6 @@ class ASRWorkerThread(QThread):
                         chunk_size=self.vad_chunk_ms
                     )
                 except Exception as e:
-                    print(f"VAD 推理出错: {e}")
                     res = []
 
                 if res and "value" in res[0] and len(res[0]["value"]) > 0:
@@ -159,89 +172,72 @@ class ASRWorkerThread(QThread):
                         if segment[0] > -1: last_vad_beg = segment[0]
                         if segment[1] > -1: last_vad_end = segment[1]
                     
-                    # 判断是否有一段完整的语音结束
                     if last_vad_beg > -1 and last_vad_end > -1:
                         silence_counter += 1
                     else:
                         silence_counter = 0
 
-                    # 触发切分识别 (VAD 认为一句话结束了)
+                    # === [逻辑 A] VAD 自然切分 ===
                     if silence_counter >= required_silence_count:
-                        # 计算起止点
-                        beg = int((last_vad_beg - offset) * self.sample_rate / 1000)
-                        end = int((last_vad_end - offset) * self.sample_rate / 1000)
+                        # VAD 认为说话结束了
                         
-                        # 安全检查：确保索引在 buffer 范围内
-                        # 关键改动：end 必须 > beg，但不需要 <= buffer.shape[0] (因为我们只切 buffer 里有的)
-                        valid_end = min(end, vad_buffer.shape[0])
+                        # 识别整个缓冲区
+                        rms = np.sqrt(np.mean(vad_buffer**2))
+                        if rms > self.noise_threshold:
+                            try:
+                                text = asr_transcribe(vad_buffer, config_override=self.config)
+                                if text and text.strip() and text != last_text:
+                                    last_text = text
+                                    audio_id = str(int(_time.time() * 1000))
+                                    self.result_ready.emit(text, audio_id)
+                            except Exception as e:
+                                print(f"识别错误: {e}")
                         
-                        if valid_end > beg:
-                            segment_audio = vad_buffer[beg:valid_end]
-                            
-                            # RMS 静音检测 (防幻觉)
-                            rms = np.sqrt(np.mean(segment_audio**2))
-                            if rms > self.noise_threshold:
-                                try:
-                                    text = asr_transcribe(segment_audio)
-                                    if text and text.strip() and text != last_text:
-                                        last_text = text
-                                        audio_id = str(int(_time.time() * 1000))
-                                        self.recognized_audio[audio_id] = segment_audio
-                                        self.result_ready.emit(text, audio_id)
-                                except Exception as e:
-                                    print(f"识别错误: {e}")
-                            
-                            # === 关键补丁：只切掉用到 valid_end 的部分，保留剩下的所有尾巴 ===
-                            # 这样下一句的开头绝对不会丢
-                            vad_buffer = vad_buffer[valid_end:] 
-                            
-                            # 必须同步更新 list 缓存，否则下次 concat 又把旧数据拼回来了
-                            vad_buffer_list = [vad_buffer] if vad_buffer.size > 0 else []
-                            
-                            # 更新时间偏移量
-                            offset = last_vad_end
-                        
-                        # 重置状态
+                        # VAD 自然结束，清空缓冲区，干干净净
+                        vad_buffer = np.array([], dtype=np.float32)
+                        self.cache_vad = {} # VAD 缓存也重置
                         last_vad_beg = -1
                         last_vad_end = -1
                         silence_counter = 0
 
-            # === 保底逻辑 (强制切分) ===
-            # 防止长时间不说话导致内存溢出，或者 VAD 漏检
-            vad_buffer = np.concatenate(vad_buffer_list) if vad_buffer_list else np.array([], dtype=np.float32)
+            # === [逻辑 B] 强制切分保护 (防止死锁) ===
+            current_duration = len(vad_buffer) / self.sample_rate
             
-            if vad_buffer.shape[0] / self.sample_rate >= self.buffer_seconds:
-                cut_samples = int(self.buffer_seconds * self.sample_rate)
-                segment_audio = vad_buffer[:cut_samples]
+            if current_duration >= FORCE_CUT_LIMIT:
+                print(f"⚠️ 触发强制切分 ({current_duration:.1f}s > {FORCE_CUT_LIMIT}s)")
                 
-                # 同样进行 RMS 检测
-                rms = np.sqrt(np.mean(segment_audio**2))
+                # 1. 识别当前所有内容
+                rms = np.sqrt(np.mean(vad_buffer**2))
                 if rms > self.noise_threshold:
                     try:
-                        text = asr_transcribe(segment_audio)
+                        text = asr_transcribe(vad_buffer)
                         if text and text.strip() and text != last_text:
                             last_text = text
                             audio_id = str(int(_time.time() * 1000))
-                            self.recognized_audio[audio_id] = segment_audio
                             self.result_ready.emit(text, audio_id)
                     except Exception as e:
                          print(f"强制切分识别错误: {e}")
+
+                # 2. [关键修正] 重叠回填逻辑
+                # 保留最后 1.0 秒作为下一段的开头
+                OVERLAP_SAMPLES = int(1.0 * self.sample_rate)
                 
-                # 移除强制切分的部分
-                vad_buffer = vad_buffer[cut_samples:]
-                vad_buffer_list = [vad_buffer] if vad_buffer.size > 0 else []
-                offset += self.buffer_seconds * 1000
+                if len(vad_buffer) > OVERLAP_SAMPLES:
+                    # 切片：取最后 1秒
+                    vad_buffer = vad_buffer[-OVERLAP_SAMPLES:]
+                    # !!! 重要 !!! 重置 VAD 缓存，因为音频流被打断了，旧的 VAD 状态可能不匹配
+                    self.cache_vad = {} 
+                else:
+                    # 如果总长度都不够重叠（理论不该发生），清空
+                    vad_buffer = np.array([], dtype=np.float32)
+
+                # 重置计数器
                 last_vad_beg = -1
                 last_vad_end = -1
                 silence_counter = 0
-
-            # === 缓存清理 ===
-            if _time.time() - self.last_cache_clear_time > self.cache_clear_interval:
-                self.recognized_audio.clear()
-                self.last_cache_clear_time = _time.time()
             
-            # 降低 CPU 占用
-            _time.sleep(0.01)
+            # 极短休眠，让出 CPU
+            _time.sleep(0.005)
 
     def stop(self):
         self.running = False

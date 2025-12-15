@@ -1,9 +1,11 @@
-model_name: small
+# === ASR Model Configuration ===
 language: zh
 device: cuda
 sample_rate: 16000
 buffer_seconds: 6      # Optimized for responsiveness
 noise_threshold: 0.002 # Silence threshold
+vad_sensitivity_factor: 0.2  # 新增配置，表示将默认 VAD 阈值乘以 0.2
+disable_update: True
 
 # === Auto-Send Delay ===
 # Time in seconds to wait before auto-typing.
@@ -13,5 +15,15 @@ auto_send_delay: 3
 # === Local Model Paths ===
 # MUST use double backslashes "\\" for Windows paths.
 # If these paths are empty or incorrect, it WILL download from cloud.
-local_asr_path: "D:\\GitHub\\ASRInput\\models\\iic\\SenseVoiceSmall"
-local_vad_path: "D:\\GitHub\\ASRInput\\models\\iic\\speech_fsmn_vad_zh-cn-16k-common-pytorch"
+local_asr_path: "models\\iic\\SenseVoiceSmall"
+local_vad_path: "models\\iic\\speech_fsmn_vad_zh-cn-16k-common-pytorch"
+
+
+
+
+# === [您的实测最佳参数] ===
+# 1. 断句等待: 0.8秒 (0.8 / 0.256 ≈ 3次，正是您要的"3次静音")
+vad_pause_delay: 0.8 
+
+# # 2. 灵敏度: 1.4 (抗噪模式，实测效果好)
+# vad_sensitivity_factor: 1.4

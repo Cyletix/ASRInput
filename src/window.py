@@ -7,7 +7,7 @@ from PyQt6.QtWidgets import (
     QApplication, QSystemTrayIcon, QMenu, QSizePolicy
 )
 from PyQt6.QtCore import Qt, QTimer, QSize, QEvent
-from PyQt6.QtGui import QMouseEvent, QGuiApplication, QIcon, QAction, QFocusEvent, QPixmap, QColor
+from PyQt6.QtGui import QMouseEvent, QGuiApplication, QIcon, QAction, QFocusEvent, QPixmap, QColor, QActionGroup
 import keyboard
 from asr_core import emo_set
 
@@ -54,7 +54,7 @@ class ModernUIWindow(QMainWindow):
         
         # 1. 麦克风按钮
         self.toggle_button = QPushButton()
-        self.setup_round_button(self.toggle_button, 30, 24, "#292929")
+        self.setup_round_button(self.toggle_button, 30, 20, "#292929")
         self.toggle_button.clicked.connect(self.toggle_recognition)
         layout.addWidget(self.toggle_button)
         
@@ -144,7 +144,7 @@ class ModernUIWindow(QMainWindow):
             self.setup_round_button(self.toggle_button, 50, 30, "#A4C2E9", extra_border="border: 2px solid #556070;")
         else:
             # 完整模式：激活色 #2196F3，正常大小
-            self.setup_round_button(self.toggle_button, 30, 24, "#2196F3")
+            self.setup_round_button(self.toggle_button, 30, 20, "#A4C2E9")
 
     def set_disabled_state(self):
         if os.path.exists(ICON_INACTIVE):
@@ -157,7 +157,7 @@ class ModernUIWindow(QMainWindow):
             self.setup_round_button(self.toggle_button, 50, 30, "#292929", extra_border="border: 2px solid #556070;")
         else:
             # 完整模式：灰色，正常大小
-            self.setup_round_button(self.toggle_button, 30, 24, "#292929")
+            self.setup_round_button(self.toggle_button, 30, 20, "#292929")
 
     # === 托盘菜单 ===
     def init_tray_icon(self):
@@ -169,6 +169,10 @@ class ModernUIWindow(QMainWindow):
             
         self.tray_menu = QMenu()
         
+        action_show = QAction("👓显示/隐藏", self)
+        action_show.triggered.connect(self.toggle_window_visibility)
+        self.tray_menu.addAction(action_show)
+
         # 模式切换
         self.action_ui_mode = QAction("🔄 切换极简模式", self)
         self.action_ui_mode.triggered.connect(self.toggle_ui_mode)
@@ -177,7 +181,7 @@ class ModernUIWindow(QMainWindow):
         self.tray_menu.addSeparator()
 
         # 服务开关
-        self.action_toggle_service = QAction("✅ 启用语音服务", self)
+        self.action_toggle_service = QAction("✅ 启用服务", self)
         self.action_toggle_service.setCheckable(True)
         self.action_toggle_service.setChecked(True)
         self.action_toggle_service.triggered.connect(self.handle_tray_toggle_service)
@@ -185,11 +189,41 @@ class ModernUIWindow(QMainWindow):
         
         self.tray_menu.addSeparator()
 
-        # 缓冲设置
-        buffer_menu = self.tray_menu.addMenu("🔧 缓冲时长 (断句)")
+        # === [新增] 语言选择菜单 ===
+        lang_menu = self.tray_menu.addMenu("🌐 语言设置")
+        self.lang_action_group = QActionGroup(self)
+        self.lang_action_group.setExclusive(True)
+        
+        # 获取当前语言配置 (默认 zh)
+        current_lang = self.config.get("language", "zh")
+        
+        lang_options = [
+            ("🇨🇳 中文 (zh)", "zh"),
+            ("🇺🇸 英语 (en)", "en"),
+            ("🇯🇵 日语 (ja)", "ja"),
+            ("🇭🇰 粤语 (yue)", "yue"),
+            ("🇰🇷 韩语 (ko)", "ko"),
+            ("🤖 自动 (auto)", "auto")
+        ]
+        
+        for label, code in lang_options:
+            act = QAction(label, self)
+            act.setCheckable(True)
+            act.setData(code) # 存储 "zh", "en" 等代码
+            self.lang_action_group.addAction(act)
+            lang_menu.addAction(act)
+            
+            # 精准打钩
+            if current_lang == code:
+                act.setChecked(True)
+                
+        self.lang_action_group.triggered.connect(self.on_lang_group_triggered)
+
+        # === 缓冲设置 (保持原样) ===
+        buffer_menu = self.tray_menu.addMenu("🔧 缓冲时长")
         self.action_group_buffer = []
-        current_buf = self.config.get("buffer_seconds", 4)
-        for sec in [2, 4, 8]:
+        current_buf = self.config.get("buffer_seconds", 6)
+        for sec in [2, 4, 6, 8]:
             act = QAction(f"{sec} 秒", self)
             act.setCheckable(True)
             act.setChecked(current_buf == sec)
@@ -197,12 +231,49 @@ class ModernUIWindow(QMainWindow):
             buffer_menu.addAction(act)
             self.action_group_buffer.append(act)
 
-        # 延迟设置
+        self.tray_menu.addSeparator()
+
+        # === [修复] VAD 灵敏度 (解决无对勾问题) ===
+        vad_menu = self.tray_menu.addMenu("🎙️ 灵敏度 (VAD)")
+        self.vad_action_group = QActionGroup(self)
+        self.vad_action_group.setExclusive(True)
+        
+        current_vad = self.config.get("vad_sensitivity_factor", 1.0)
+        
+        vad_options = [
+            ("特灵敏 (0.5)", 0.5), 
+            ("较灵敏 (0.8)", 0.8), 
+            ("标准 (1.0)", 1.0), 
+            ("抗噪 (1.4)", 1.4),
+            ("超抗噪 (2.0)", 2.0)
+        ]
+        
+        for label, factor in vad_options:
+            act = QAction(label, self)
+            act.setCheckable(True)
+            act.setData(factor)
+            self.vad_action_group.addAction(act)
+            vad_menu.addAction(act)
+            
+            # [关键修复] 浮点数比较 + 显式打钩
+            if abs(current_vad - factor) < 0.01:
+                act.setChecked(True)
+        
+        # 如果没有任何一个被选中 (例如配置里是旧值)，强制选中“标准”
+        if not self.vad_action_group.checkedAction():
+             for act in self.vad_action_group.actions():
+                 if abs(act.data() - 1.0) < 0.01:
+                     act.setChecked(True)
+                     break
+
+        self.vad_action_group.triggered.connect(self.on_vad_group_triggered)
+
+        # === 延迟设置 (保持原样) ===
         delay_menu = self.tray_menu.addMenu("⏱️ 自动上屏延迟")
         self.action_group_delay = []
         current_delay = self.config.get("auto_send_delay", 3)
-        for sec in [1, 3, 5, 999]:
-            label = "不自动" if sec == 999 else f"{sec} 秒"
+        for sec in [1, 2, 3, 5, 999]:
+            label = "手动" if sec == 999 else f"{sec} 秒"
             act = QAction(label, self)
             act.setCheckable(True)
             act.setChecked(current_delay == sec)
@@ -211,10 +282,6 @@ class ModernUIWindow(QMainWindow):
             self.action_group_delay.append(act)
 
         self.tray_menu.addSeparator()
-        
-        action_show = QAction("显示/隐藏", self)
-        action_show.triggered.connect(self.toggle_window_visibility)
-        self.tray_menu.addAction(action_show)
         
         action_quit = QAction("退出程序", self)
         action_quit.triggered.connect(self.exit_application)
@@ -272,7 +339,7 @@ class ModernUIWindow(QMainWindow):
             self.manual_send_button.show()
             
             # 按钮样式恢复
-            self.setup_round_button(self.toggle_button, 30, 24, "#292929")
+            self.setup_round_button(self.toggle_button, 30, 20, "#292929")
             
         # 刷新状态颜色
         if self.worker and not self.worker.paused:
@@ -295,8 +362,69 @@ class ModernUIWindow(QMainWindow):
     def update_config_delay(self, seconds):
         self.config["auto_send_delay"] = seconds
         for act in self.action_group_delay: 
-            val = 999 if "不自动" in act.text() else int(act.text().split()[0])
+            val = 999 if "手动" in act.text() else int(act.text().split()[0])
             act.setChecked(val == seconds)
+
+    # window.py - 添加新方法
+    def update_config_vad(self, factor):
+        self.config["vad_sensitivity_factor"] = factor
+        print(f"VAD 灵敏度调整为: {factor}")
+        
+        # 更新菜单勾选状态
+        for act in self.vad_action_group.actions():
+            # 提取括号里的数字进行比较，或者根据 text 简单判断
+            # 这里简单做：重置所有，再次根据当前 config 设
+            current_val = self.config["vad_sensitivity_factor"]
+            # 假设 act.text() 格式是 "Label (0.1)"
+            try:
+                val_in_text = float(re.findall(r"\d+\.?\d*", act.text())[-1])
+                act.setChecked(abs(val_in_text - current_val) < 0.01)
+            except:
+                pass
+
+        # 重启服务以应用更改 (因为 VAD 参数是在初始化时传入的)
+        if self.worker:
+            self.stop_worker_service()
+            # 稍微给一点时间让线程释放资源
+            QTimer.singleShot(200, self.start_worker_service)
+
+    def on_vad_group_triggered(self, action):
+        # 直接从 Action 中取回数值，精准无误
+        new_factor = action.data()
+        if new_factor is None: return
+
+        print(f"切换 VAD 灵敏度因子: {new_factor}")
+        self.config["vad_sensitivity_factor"] = new_factor
+        
+        # 重启服务生效
+        if self.worker:
+            self.stop_worker_service()
+            QTimer.singleShot(200, self.start_worker_service)
+
+    # === 新增语言切换回调 ===
+    def on_lang_group_triggered(self, action):
+        new_lang = action.data()
+        if not new_lang: return
+        
+        print(f"🌐 切换语言模式: {new_lang} ({action.text()})")
+        self.config["language"] = new_lang
+        
+        # 重启服务以应用新模型参数
+        if self.worker:
+            self.stop_worker_service()
+            QTimer.singleShot(200, self.start_worker_service)
+
+    # === (原来的 VAD 回调，确保有) ===
+    def on_vad_group_triggered(self, action):
+        new_factor = action.data()
+        if new_factor is None: return
+
+        print(f"🎙️ 切换 VAD 灵敏度因子: {new_factor}")
+        self.config["vad_sensitivity_factor"] = new_factor
+        
+        if self.worker:
+            self.stop_worker_service()
+            QTimer.singleShot(200, self.start_worker_service)
 
     # === 服务控制逻辑 ===
     def handle_tray_toggle_service(self):
@@ -309,11 +437,19 @@ class ModernUIWindow(QMainWindow):
     def start_worker_service(self):
         if self.worker is not None: return
         from worker_thread import ASRWorkerThread
+
+        # === [修正] 从配置读取采样率和设备 ===
+        # 注意：SenseVoiceSmall 官方训练是 16000。
+        # 如果你改成 44100，录音流会变，但模型可能会识别率下降或报错，
+        # 但既然你要求生效，这里必须读配置。
+        cfg_sample_rate = self.config.get("sample_rate", 16000)
+        cfg_device = self.config.get("device", "cuda")
+
         self.worker = ASRWorkerThread(
-            sample_rate=16000,
+            sample_rate=cfg_sample_rate,
             chunk=self.config.get("chunk", 256),
             buffer_seconds=self.config.get("buffer_seconds", 4),
-            device=self.config.get("device", "cuda"),
+            device=cfg_device,
             config=self.config
         )
         self.worker.result_ready.connect(self.on_new_recognition)
@@ -452,7 +588,7 @@ class ModernUIWindow(QMainWindow):
         if event.button() == Qt.MouseButton.LeftButton:
             self._startPos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
     def mouseMoveEvent(self, event):
-        if hasattr(self, '_startPos') and self._startPos and event.buttons() == Qt.MouseButton.LeftButton:
+        if hasattr(self, '_startPos') and self._startPos is not None and event.buttons() == Qt.MouseButton.LeftButton:
             self.move(event.globalPosition().toPoint() - self._startPos)
     def mouseReleaseEvent(self, event):
         self._startPos = None

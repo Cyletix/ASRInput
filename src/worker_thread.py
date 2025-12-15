@@ -165,21 +165,24 @@ class ASRWorkerThread(QThread):
                     else:
                         silence_counter = 0
 
-                    # 触发切分识别
+                    # 触发切分识别 (VAD 认为一句话结束了)
                     if silence_counter >= required_silence_count:
+                        # 计算起止点
                         beg = int((last_vad_beg - offset) * self.sample_rate / 1000)
                         end = int((last_vad_end - offset) * self.sample_rate / 1000)
                         
-                        # 确保索引有效
-                        if end > beg and end <= vad_buffer.shape[0]:
-                            segment_audio = vad_buffer[beg:end]
+                        # 安全检查：确保索引在 buffer 范围内
+                        # 关键改动：end 必须 > beg，但不需要 <= buffer.shape[0] (因为我们只切 buffer 里有的)
+                        valid_end = min(end, vad_buffer.shape[0])
+                        
+                        if valid_end > beg:
+                            segment_audio = vad_buffer[beg:valid_end]
                             
-                            # === 关键：RMS 静音检测 (防止幻觉) ===
+                            # RMS 静音检测 (防幻觉)
                             rms = np.sqrt(np.mean(segment_audio**2))
                             if rms > self.noise_threshold:
                                 try:
                                     text = asr_transcribe(segment_audio)
-                                    # 只有非空且不重复的内容才发射
                                     if text and text.strip() and text != last_text:
                                         last_text = text
                                         audio_id = str(int(_time.time() * 1000))
@@ -188,9 +191,14 @@ class ASRWorkerThread(QThread):
                                 except Exception as e:
                                     print(f"识别错误: {e}")
                             
-                            # 切分后，移除已处理的音频
-                            vad_buffer = vad_buffer[end:]
+                            # === 关键补丁：只切掉用到 valid_end 的部分，保留剩下的所有尾巴 ===
+                            # 这样下一句的开头绝对不会丢
+                            vad_buffer = vad_buffer[valid_end:] 
+                            
+                            # 必须同步更新 list 缓存，否则下次 concat 又把旧数据拼回来了
                             vad_buffer_list = [vad_buffer] if vad_buffer.size > 0 else []
+                            
+                            # 更新时间偏移量
                             offset = last_vad_end
                         
                         # 重置状态

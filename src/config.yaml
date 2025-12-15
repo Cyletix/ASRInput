@@ -2,7 +2,7 @@ model_name: small
 language: zh
 device: cuda
 sample_rate: 16000
-buffer_seconds: 4      # Optimized for responsiveness
+buffer_seconds: 6      # Optimized for responsiveness
 noise_threshold: 0.002 # Silence threshold
 
 # === Auto-Send Delay ===

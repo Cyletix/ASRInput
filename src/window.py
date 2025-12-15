@@ -11,7 +11,7 @@ from PyQt6.QtGui import QMouseEvent, QGuiApplication, QIcon, QAction, QFocusEven
 import keyboard
 from asr_core import emo_set
 
-# === 图标文件配置 ===
+# === 图标配置 ===
 ICON_APP = "audio-melody-music-38-svgrepo-com.svg"
 ICON_ACTIVE = "ms_mic_active.svg"
 ICON_INACTIVE = "ms_mic_inactive.svg"
@@ -32,13 +32,14 @@ class ModernUIWindow(QMainWindow):
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.worker = None
         self.exiting = False
-        
+        self.service_running = False  # 服务总开关状态
+        self.mini_mode = False        # 极简模式状态
+
         # 默认配置兜底
         if "auto_send_delay" not in self.config:
             self.config["auto_send_delay"] = 3
 
-        # === 界面构建 (保留你的透明圆角样式) ===
-        # 强制使用完整模式 (accept_feedback=True) 的样式，因为你要显示输入框
+        # === 界面构建 (默认完整模式) ===
         self.setFixedSize(400, 40)
         flags = (Qt.WindowType.Tool |
                  Qt.WindowType.FramelessWindowHint |
@@ -46,7 +47,6 @@ class ModernUIWindow(QMainWindow):
         self.setWindowFlags(flags)
         
         central_widget = QWidget(self)
-        # 透明黑背景 + 圆角边框
         central_widget.setStyleSheet("border: 1px solid #1C1C1C; border-radius: 8px; background-color: rgba(0, 0, 0, 0.80);")
         layout = QHBoxLayout(central_widget)
         layout.setContentsMargins(5, 5, 5, 5)
@@ -64,19 +64,11 @@ class ModernUIWindow(QMainWindow):
         self.recognition_edit.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.recognition_edit.setFixedHeight(25)
         self.recognition_edit.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        # 底部蓝条样式
         self.recognition_edit.setStyleSheet("border: 1px solid #292929; border-bottom: 2px solid #7886C7; border-radius: 8px; padding: 0px; color: white; background: transparent;")
         self.recognition_edit.installEventFilter(self)
         layout.addWidget(self.recognition_edit, stretch=1)
         
-        # 3. 反馈按钮
-        self.feedback_button = QPushButton("反馈")
-        self.feedback_button.setFixedSize(50, 25)
-        self.feedback_button.setStyleSheet("border: 1px solid #292929; border-radius: 8px; color: white; background: #444;")
-        self.feedback_button.clicked.connect(self.on_feedback_clicked)
-        layout.addWidget(self.feedback_button)
-        
-        # 4. 上屏按钮
+        # 3. 上屏按钮
         self.manual_send_button = QPushButton("Send")
         self.manual_send_button.setFixedSize(50, 25)
         self.manual_send_button.setStyleSheet("border: 1px solid #292929; border-radius: 8px; color: white; background: #444;")
@@ -105,45 +97,69 @@ class ModernUIWindow(QMainWindow):
         
         # 热键
         try:
-            keyboard.add_hotkey('ctrl+shift+h', self.toggle_window_visibility)
+            keyboard.add_hotkey('ctrl+shift+h', lambda: QTimer.singleShot(0, self.toggle_window_visibility))
             keyboard.add_hotkey('esc', lambda: QTimer.singleShot(100, self.on_esc_pressed))
         except:
             print("热键注册失败")
         
-        # === 找回丢失的：高级托盘菜单 ===
+        # 托盘与位置
         self.init_tray_icon()
-        
         self.reposition_window()
         
-        # 默认启动并设置初始状态图标
+        # 默认启动并设置初始状态
         self.set_disabled_state()
-        QTimer.singleShot(500, self.start_worker)
+        QTimer.singleShot(500, self.start_worker_service)
 
     def setup_round_button(self, button, btn_size, icon_size, bg_color, extra_border=""):
         button.setFixedSize(btn_size, btn_size)
         button.setIconSize(QSize(icon_size, icon_size))
         radius = btn_size // 2
-        style = f"{extra_border} border-radius: {radius}px; background-color: {bg_color}; padding: 4px;"
+        style = f"""
+            QPushButton {{
+                {extra_border}
+                border-radius: {radius}px;
+                background-color: {bg_color};
+                padding: 2px;
+                border: 1px solid transparent;
+            }}
+            QPushButton:hover {{
+                border: 1px solid rgba(255, 255, 255, 0.5);
+            }}
+            QPushButton:pressed {{
+                background-color: black;
+                border: 1px solid rgba(255, 255, 255, 0.3);
+            }}
+        """
         button.setStyleSheet(style)
 
-    # === 图标状态控制 (蓝色/灰色) ===
+    # === 图标状态控制 ===
     def set_active_state(self):
         if os.path.exists(ICON_ACTIVE):
             self.toggle_button.setIcon(QIcon(ICON_ACTIVE))
         else:
             self.toggle_button.setText("🎤")
-        # 激活：蓝色背景高亮
-        self.setup_round_button(self.toggle_button, 30, 24, "#2196F3") # 蓝色
+        
+        if self.mini_mode:
+            # 极简模式：激活色 #A4C2E9，50x30, 边框保持
+            self.setup_round_button(self.toggle_button, 50, 30, "#A4C2E9", extra_border="border: 2px solid #556070;")
+        else:
+            # 完整模式：激活色 #2196F3，正常大小
+            self.setup_round_button(self.toggle_button, 30, 24, "#2196F3")
 
     def set_disabled_state(self):
         if os.path.exists(ICON_INACTIVE):
             self.toggle_button.setIcon(QIcon(ICON_INACTIVE))
         else:
             self.toggle_button.setText("⏸")
-        # 非激活：深灰背景
-        self.setup_round_button(self.toggle_button, 30, 24, "#292929")
+        
+        if self.mini_mode:
+            # 极简模式：灰色，50x30, 边框保持
+            self.setup_round_button(self.toggle_button, 50, 30, "#292929", extra_border="border: 2px solid #556070;")
+        else:
+            # 完整模式：灰色，正常大小
+            self.setup_round_button(self.toggle_button, 30, 24, "#292929")
 
-    # === 核心：找回高级托盘菜单 ===
+    # === 托盘菜单 ===
     def init_tray_icon(self):
         self.tray_icon = QSystemTrayIcon(self)
         if os.path.exists(ICON_APP):
@@ -153,7 +169,14 @@ class ModernUIWindow(QMainWindow):
             
         self.tray_menu = QMenu()
         
-        # 1. 服务开关
+        # 模式切换
+        self.action_ui_mode = QAction("🔄 切换极简模式", self)
+        self.action_ui_mode.triggered.connect(self.toggle_ui_mode)
+        self.tray_menu.addAction(self.action_ui_mode)
+        
+        self.tray_menu.addSeparator()
+
+        # 服务开关
         self.action_toggle_service = QAction("✅ 启用语音服务", self)
         self.action_toggle_service.setCheckable(True)
         self.action_toggle_service.setChecked(True)
@@ -162,7 +185,7 @@ class ModernUIWindow(QMainWindow):
         
         self.tray_menu.addSeparator()
 
-        # 2. 缓冲设置
+        # 缓冲设置
         buffer_menu = self.tray_menu.addMenu("🔧 缓冲时长 (断句)")
         self.action_group_buffer = []
         current_buf = self.config.get("buffer_seconds", 4)
@@ -174,7 +197,7 @@ class ModernUIWindow(QMainWindow):
             buffer_menu.addAction(act)
             self.action_group_buffer.append(act)
 
-        # 3. 延迟设置
+        # 延迟设置
         delay_menu = self.tray_menu.addMenu("⏱️ 自动上屏延迟")
         self.action_group_delay = []
         current_delay = self.config.get("auto_send_delay", 3)
@@ -201,14 +224,73 @@ class ModernUIWindow(QMainWindow):
         self.tray_icon.show()
         self.tray_icon.activated.connect(lambda r: self.toggle_window_visibility() if r == QSystemTrayIcon.ActivationReason.DoubleClick else None)
 
-    # === 配置动态更新 ===
+    # === [关键修改] 模式切换逻辑 ===
+    def toggle_ui_mode(self):
+        self.mini_mode = not self.mini_mode
+        self.update_ui_layout()
+    
+    def update_ui_layout(self):
+        if self.mini_mode:
+            # === 极简模式 (参考你提供的样式) ===
+            self.setFixedSize(150, 100) # 参考样式尺寸
+            
+            # 设置 Flags：不接受焦点，不激活窗口
+            flags = (Qt.WindowType.Tool |
+                     Qt.WindowType.FramelessWindowHint |
+                     Qt.WindowType.WindowStaysOnTopHint |
+                     Qt.WindowType.WindowDoesNotAcceptFocus)
+            self.setWindowFlags(flags)
+            self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+            self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            
+            # 样式：15px 圆角
+            self.centralWidget().setStyleSheet("border: 1px solid #1C1C1C; border-radius: 15px; background-color: rgba(0, 0, 0, 0.80);")
+            
+            # 隐藏输入框和按钮
+            self.recognition_edit.hide()
+            self.manual_send_button.hide()
+            
+            # 按钮样式初始化 (50x30, 30 icon, 边框)
+            self.setup_round_button(self.toggle_button, 50, 30, "#292929", extra_border="border: 2px solid #556070;")
+            
+        else:
+            # === 完整模式 (恢复原样) ===
+            self.setFixedSize(400, 40)
+            
+            # 恢复 Flags：允许焦点
+            flags = (Qt.WindowType.Tool |
+                     Qt.WindowType.FramelessWindowHint |
+                     Qt.WindowType.WindowStaysOnTopHint)
+            self.setWindowFlags(flags)
+            self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, False)
+            self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+            
+            # 样式：8px 圆角
+            self.centralWidget().setStyleSheet("border: 1px solid #1C1C1C; border-radius: 8px; background-color: rgba(0, 0, 0, 0.80);")
+            
+            self.recognition_edit.show()
+            self.manual_send_button.show()
+            
+            # 按钮样式恢复
+            self.setup_round_button(self.toggle_button, 30, 24, "#292929")
+            
+        # 刷新状态颜色
+        if self.worker and not self.worker.paused:
+            self.set_active_state()
+        else:
+            self.set_disabled_state()
+            
+        # 必须调用 show 才能应用新的 Flags
+        self.show()
+        self.reposition_window()
+
+    # === 配置更新 ===
     def update_config_buffer(self, seconds):
         self.config["buffer_seconds"] = seconds
         for act in self.action_group_buffer: act.setChecked(int(act.text().split()[0]) == seconds)
-        # 重启 Worker 以应用新 Buffer
         if self.worker:
-            self.worker.stop()
-            self.start_worker()
+            self.stop_worker_service()
+            self.start_worker_service()
 
     def update_config_delay(self, seconds):
         self.config["auto_send_delay"] = seconds
@@ -216,20 +298,16 @@ class ModernUIWindow(QMainWindow):
             val = 999 if "不自动" in act.text() else int(act.text().split()[0])
             act.setChecked(val == seconds)
 
+    # === 服务控制逻辑 ===
     def handle_tray_toggle_service(self):
         is_on = self.action_toggle_service.isChecked()
         if is_on:
-            self.start_worker()
+            self.start_worker_service()
         else:
-            if self.worker:
-                self.worker.stop()
-                self.worker = None
-            self.set_disabled_state()
-            self.recognition_active = False
+            self.stop_worker_service()
 
-    # === Worker 控制 ===
-    def start_worker(self):
-        if self.worker is not None: return # 防止重复启动
+    def start_worker_service(self):
+        if self.worker is not None: return
         from worker_thread import ASRWorkerThread
         self.worker = ASRWorkerThread(
             sample_rate=16000,
@@ -241,7 +319,18 @@ class ModernUIWindow(QMainWindow):
         self.worker.result_ready.connect(self.on_new_recognition)
         self.worker.initialized.connect(self.on_worker_initialized)
         self.worker.start()
+        self.service_running = True
         print("识别服务启动中...")
+
+    def stop_worker_service(self):
+        if self.worker:
+            self.worker.stop()
+            self.worker = None
+        self.service_running = False
+        self.recognition_active = False
+        self.set_disabled_state()
+        self.recognition_edit.setPlaceholderText("服务已停止")
+        self.hide()
 
     def on_worker_initialized(self):
         self.recognition_active = True
@@ -251,24 +340,28 @@ class ModernUIWindow(QMainWindow):
 
     def toggle_recognition(self):
         if self.worker is None:
-            self.start_worker()
+            self.start_worker_service()
         else:
             if self.worker.paused:
                 self.worker.resume()
                 self.set_active_state()
-                print("识别已恢复")
             else:
                 self.worker.pause()
                 self.set_disabled_state()
-                print("识别已暂停")
 
-    # === 事件过滤器 & 焦点 ===
+    def resume_recognition_state(self):
+        if self.service_running and self.worker:
+            self.worker.resume()
+            self.set_active_state()
+            print("<<< 恢复识别状态")
+
+    # === 交互与事件 ===
     def eventFilter(self, obj, event):
         if obj == self.recognition_edit and event.type() == QEvent.Type.FocusIn:
             if self.worker and not self.worker.paused:
                 self.worker.pause()
                 self.set_disabled_state()
-                self.auto_send_timer.stop() # 停止倒计时
+                self.auto_send_timer.stop()
                 print(">>> 输入框获得焦点，暂停自动识别")
         return super().eventFilter(obj, event)
 
@@ -279,28 +372,29 @@ class ModernUIWindow(QMainWindow):
             print(">>> 窗口失去焦点，识别已暂停")
         super().focusOutEvent(event)
 
-    # === 识别与上屏 ===
     def on_new_recognition(self, recognized_text, audio_id):
         processed = recognized_text.strip()
         self.last_recognized_text = processed
         self.last_audio_id = audio_id
         
-        # 写入日志
         self.log_file.write(f"{time.strftime('%H:%M:%S')} - {processed}\n")
         self.log_file.flush()
         
-        # 如果输入框没有焦点，说明用户没在编辑，可以自动处理
-        if not self.recognition_edit.hasFocus():
-            current = self.recognition_edit.text()
-            # 拼接文本
-            new_text = current + " " + processed if current else processed
-            self.recognition_edit.setText(new_text)
-            
-            # 启动/重置自动上屏倒计时
-            delay_sec = self.config.get("auto_send_delay", 3)
-            if delay_sec < 900: # 999为不自动
-                self.auto_send_timer.start(delay_sec * 1000)
-                print(f"收到内容，{delay_sec}秒后自动上屏...")
+        # === [关键修改] 极简模式逻辑 ===
+        if self.mini_mode:
+            # 极简模式：没有输入框缓冲，没有延迟，直接上屏
+            insert_text_into_active_window(processed)
+        else:
+            # 完整模式：原有的带缓冲区的逻辑
+            if not self.recognition_edit.hasFocus():
+                current = self.recognition_edit.text()
+                new_text = current + " " + processed if current else processed
+                self.recognition_edit.setText(new_text)
+                
+                delay_sec = self.config.get("auto_send_delay", 3)
+                if delay_sec < 900:
+                    self.auto_send_timer.start(delay_sec * 1000)
+                    print(f"收到内容，{delay_sec}秒后自动上屏...")
 
     def auto_send(self):
         if self.recognition_edit.hasFocus(): return
@@ -318,23 +412,26 @@ class ModernUIWindow(QMainWindow):
             QTimer.singleShot(100, lambda: (insert_text_into_active_window(current_text), self.show()))
             self.last_sent_text = current_text
             self.recognition_edit.clear()
-
-    def on_feedback_clicked(self):
-        current = self.recognition_edit.text().strip()
-        if not current: return
-        if self.worker:
-            audio_filename = self.worker.save_feedback_audio(self.last_audio_id)
-            if audio_filename:
-                feedback = {"audio": audio_filename, "text": current}
-                with open("feedback.json", "a", encoding="utf-8") as f:
-                    json.dump(feedback, f, ensure_ascii=False); f.write("\n")
-                print(f"反馈已保存: {audio_filename}")
-                self.recognition_edit.clear()
+        else:
+            self.resume_recognition_state()
 
     # === 窗口行为 ===
     def toggle_window_visibility(self):
-        if self.isVisible(): self.hide()
-        else: self.show(); self.activateWindow()
+        if self.isVisible():
+            self.hide()
+            if self.worker and not self.worker.paused:
+                self.worker.pause()
+                self.set_disabled_state()
+                print(">>> 窗口隐藏，自动暂停")
+        else:
+            self.show()
+            self.activateWindow()
+            if self.worker:
+                self.worker.resume()
+                self.set_active_state()
+                print("<<< 窗口唤醒，自动开始")
+            else:
+                self.start_worker_service()
 
     def on_esc_pressed(self):
         if self.worker and not self.worker.paused:
@@ -346,7 +443,10 @@ class ModernUIWindow(QMainWindow):
         screen = QGuiApplication.primaryScreen()
         if screen:
             geom = screen.availableGeometry()
-            self.move((geom.width() - self.width()) // 2, geom.height() - self.height() - 50)
+            # 贴着右下角
+            x = geom.width() - self.width()
+            y = geom.height() - self.height() 
+            self.move(x, y)
 
     def mousePressEvent(self, event: QMouseEvent):
         if event.button() == Qt.MouseButton.LeftButton:
@@ -358,12 +458,14 @@ class ModernUIWindow(QMainWindow):
         self._startPos = None
 
     def closeEvent(self, event):
-        # 除非显式退出，否则只隐藏
         if self.exiting:
             if self.worker: self.worker.stop()
             self.log_file.close()
             event.accept()
         else:
+            if self.worker and not self.worker.paused:
+                self.worker.pause()
+                self.set_disabled_state()
             self.hide()
             event.ignore()
             

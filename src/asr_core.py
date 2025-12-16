@@ -1,4 +1,3 @@
-import time
 import numpy as np
 import re
 import yaml
@@ -28,7 +27,7 @@ def resolve_model_path(config_path_str):
 
     # 1. 尝试直接当作绝对路径
     if os.path.isabs(config_path_str) and os.path.exists(config_path_str):
-        print(f"✅ 发现绝对路径模型: {config_path_str}")
+        # print(f"✅ 发现绝对路径模型: {config_path_str}")
         return config_path_str
 
     # 2. 尝试当作相对路径拼接
@@ -37,7 +36,7 @@ def resolve_model_path(config_path_str):
     full_path = os.path.normpath(full_path)
     
     if os.path.exists(full_path):
-        print(f"✅ 发现本地相对路径模型: {full_path}")
+        # print(f"✅ 发现本地相对路径模型: {full_path}")
         return full_path
     
     print(f"⚠️ Config指定了 '{config_path_str}' 但路径不存在: {full_path}")
@@ -49,7 +48,7 @@ try:
     if getattr(sys, 'frozen', False):
         root_dir = os.path.dirname(sys.executable)
     else:
-        root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        root_dir = os.path.dirname(os.path.abspath(__file__))
         
     config_file = os.path.join(root_dir, "config.yaml")
     

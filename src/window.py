@@ -1,5 +1,4 @@
 import os
-import json
 import time
 import re
 from PyQt6.QtWidgets import (
@@ -12,16 +11,17 @@ import keyboard
 from asr_core import emo_set
 
 # === 图标配置 ===
-ICON_APP = "audio-melody-music-38-svgrepo-com.svg"
-ICON_ACTIVE = "ms_mic_active.svg"
-ICON_INACTIVE = "ms_mic_inactive.svg"
+ICON_APP = "assets/voice-chat_11401399.png"
+ICON_ACTIVE = "assets/ms_mic_active.svg"
+ICON_INACTIVE = "assets/ms_mic_inactive.svg"
 
 def insert_text_into_active_window(text):
     try:
         keyboard.write(text)
     except Exception as e:
         clipboard = QGuiApplication.clipboard()
-        clipboard.setText(text)
+        if clipboard:
+            clipboard.setText(text)
         print("keyboard.write 失败，文本已复制到剪贴板。", e)
 
 def tint_icon_white(icon, size):
@@ -156,7 +156,7 @@ class ModernUIWindow(QMainWindow):
             # 极简模式：激活色 #A4C2E9，50x30, 边框保持
             self.setup_round_button(self.toggle_button, 50, 30, "#A4C2E9", extra_border="border: 2px solid #556070;")
         else:
-            # 完整模式：激活色 #2196F3，正常大小
+            # 完整模式：激活色 #A4C2E9
             self.setup_round_button(self.toggle_button, 30, 20, "#A4C2E9")
 
     def set_disabled_state(self):
@@ -178,20 +178,19 @@ class ModernUIWindow(QMainWindow):
         if os.path.exists(ICON_APP):
             self.tray_icon.setIcon(QIcon(ICON_APP))
         else:
-            self.tray_icon.setIcon(self.style().standardIcon(QApplication.style().StandardPixmap.SP_MediaPlay))
+            style = self.style()
+            if style is not None:
+                app_style = QApplication.style()
+                if app_style is not None:
+                    std_icon = app_style.standardIcon(app_style.StandardPixmap.SP_MediaPlay)
+                    self.tray_icon.setIcon(std_icon)
             
         self.tray_menu = QMenu()
-        
-        action_show = QAction("👓显示/隐藏", self)
+
+        # 显示/隐藏
+        action_show = QAction("👓 显示/隐藏", self)
         action_show.triggered.connect(self.toggle_window_visibility)
         self.tray_menu.addAction(action_show)
-
-        # 模式切换
-        self.action_ui_mode = QAction("🔄 切换极简模式", self)
-        self.action_ui_mode.triggered.connect(self.toggle_ui_mode)
-        self.tray_menu.addAction(self.action_ui_mode)
-        
-        self.tray_menu.addSeparator()
 
         # 服务开关
         self.action_toggle_service = QAction("✅ 启用服务", self)
@@ -202,101 +201,108 @@ class ModernUIWindow(QMainWindow):
         
         self.tray_menu.addSeparator()
 
-        # === [新增] 语言选择菜单 ===
+        # 模式切换
+        self.action_ui_mode = QAction("🔄 切换模式", self)
+        self.action_ui_mode.triggered.connect(self.toggle_ui_mode)
+        self.tray_menu.addAction(self.action_ui_mode)
+        
+        self.tray_menu.addSeparator()
+
+        # === 语言选择菜单 ===
         lang_menu = self.tray_menu.addMenu("🌐 语言设置")
-        self.lang_action_group = QActionGroup(self)
-        self.lang_action_group.setExclusive(True)
-        
-        # 获取当前语言配置 (默认 zh)
-        current_lang = self.config.get("language", "zh")
-        
-        lang_options = [
-            ("🇨🇳 中文 (zh)", "zh"),
-            ("🇺🇸 英语 (en)", "en"),
-            ("🇯🇵 日语 (ja)", "ja"),
-            ("🇭🇰 粤语 (yue)", "yue"),
-            ("🇰🇷 韩语 (ko)", "ko"),
-            ("🤖 自动 (auto)", "auto")
-        ]
-        
-        for label, code in lang_options:
-            act = QAction(label, self)
-            act.setCheckable(True)
-            act.setData(code) # 存储 "zh", "en" 等代码
-            self.lang_action_group.addAction(act)
-            lang_menu.addAction(act)
+        if lang_menu is not None:
+            self.lang_action_group = QActionGroup(self)
+            self.lang_action_group.setExclusive(True)
             
-            # 精准打钩
-            if current_lang == code:
-                act.setChecked(True)
+            current_lang = self.config.get("language", "zh")
+            
+            lang_options = [
+                ("🤖 自动(auto)", "auto"),
+                ("🇨🇳 中文(zh)", "zh"),
+                ("🇺🇸 英语(en)", "en"),
+                ("🇯🇵 日语(ja)", "ja"),
+                ("🇭🇰 粤语(yue)", "yue"),
+                ("🇰🇷 韩语(ko)", "ko"),
+            ]
+            
+            for label, code in lang_options:
+                act = QAction(label, self)
+                act.setCheckable(True)
+                act.setData(code)
+                self.lang_action_group.addAction(act)
+                lang_menu.addAction(act)
                 
-        self.lang_action_group.triggered.connect(self.on_lang_group_triggered)
+                if current_lang == code:
+                    act.setChecked(True)
+                    
+            self.lang_action_group.triggered.connect(self.on_lang_group_triggered)
 
-        # === 缓冲设置 (保持原样) ===
-        buffer_menu = self.tray_menu.addMenu("🔧 缓冲时长")
-        self.action_group_buffer = []
-        current_buf = self.config.get("buffer_seconds", 6)
-        for sec in [2, 4, 6, 8]:
-            act = QAction(f"{sec} 秒", self)
-            act.setCheckable(True)
-            act.setChecked(current_buf == sec)
-            act.triggered.connect(lambda checked, s=sec: self.update_config_buffer(s))
-            buffer_menu.addAction(act)
-            self.action_group_buffer.append(act)
+        # === 缓冲设置 ===
+        buffer_menu = self.tray_menu.addMenu("🕙 缓冲时长")
+        if buffer_menu is not None:
+            self.action_group_buffer = []
+            current_buf = self.config.get("buffer_seconds", 6)
+            for sec in [2, 4, 6, 8]:
+                act = QAction(f"{sec} 秒", self)
+                act.setCheckable(True)
+                act.setChecked(current_buf == sec)
+                act.triggered.connect(lambda checked, s=sec: self.update_config_buffer(s))
+                buffer_menu.addAction(act)
+                self.action_group_buffer.append(act)
 
         self.tray_menu.addSeparator()
 
-        # === [修复] VAD 灵敏度 (解决无对勾问题) ===
-        vad_menu = self.tray_menu.addMenu("🎙️ 灵敏度 (VAD)")
-        self.vad_action_group = QActionGroup(self)
-        self.vad_action_group.setExclusive(True)
-        
-        current_vad = self.config.get("vad_sensitivity_factor", 1.0)
-        
-        vad_options = [
-            ("特灵敏 (0.5)", 0.5), 
-            ("较灵敏 (0.8)", 0.8), 
-            ("标准 (1.0)", 1.0), 
-            ("抗噪 (1.4)", 1.4),
-            ("超抗噪 (2.0)", 2.0)
-        ]
-        
-        for label, factor in vad_options:
-            act = QAction(label, self)
-            act.setCheckable(True)
-            act.setData(factor)
-            self.vad_action_group.addAction(act)
-            vad_menu.addAction(act)
+        # === VAD 灵敏度 ===
+        vad_menu = self.tray_menu.addMenu("🎙️ VAD灵敏度")
+        if vad_menu is not None:
+            self.vad_action_group = QActionGroup(self)
+            self.vad_action_group.setExclusive(True)
             
-            # [关键修复] 浮点数比较 + 显式打钩
-            if abs(current_vad - factor) < 0.01:
-                act.setChecked(True)
-        
-        # 如果没有任何一个被选中 (例如配置里是旧值)，强制选中“标准”
-        if not self.vad_action_group.checkedAction():
-             for act in self.vad_action_group.actions():
-                 if abs(act.data() - 1.0) < 0.01:
-                     act.setChecked(True)
-                     break
+            current_vad = self.config.get("vad_sensitivity_factor", 1.0)
+            
+            vad_options = [
+                ("特灵敏 (0.5)", 0.5), 
+                ("较灵敏 (0.8)", 0.8), 
+                ("标准 (1.0)", 1.0), 
+                ("抗噪 (1.4)", 1.4),
+                ("超抗噪 (2.0)", 2.0)
+            ]
+            
+            for label, factor in vad_options:
+                act = QAction(label, self)
+                act.setCheckable(True)
+                act.setData(factor)
+                self.vad_action_group.addAction(act)
+                vad_menu.addAction(act)
+                
+                if abs(current_vad - factor) < 0.01:
+                    act.setChecked(True)
+            
+            if not self.vad_action_group.checkedAction():
+                for act in self.vad_action_group.actions():
+                    if abs(act.data() - 1.0) < 0.01:
+                        act.setChecked(True)
+                        break
 
-        self.vad_action_group.triggered.connect(self.on_vad_group_triggered)
+            self.vad_action_group.triggered.connect(self.on_vad_group_triggered)
 
-        # === 延迟设置 (保持原样) ===
+        # === 延迟设置 ===
         delay_menu = self.tray_menu.addMenu("⏱️ 自动上屏延迟")
-        self.action_group_delay = []
-        current_delay = self.config.get("auto_send_delay", 3)
-        for sec in [1, 2, 3, 5, 999]:
-            label = "手动" if sec == 999 else f"{sec} 秒"
-            act = QAction(label, self)
-            act.setCheckable(True)
-            act.setChecked(current_delay == sec)
-            act.triggered.connect(lambda checked, s=sec: self.update_config_delay(s))
-            delay_menu.addAction(act)
-            self.action_group_delay.append(act)
+        if delay_menu is not None:
+            self.action_group_delay = []
+            current_delay = self.config.get("auto_send_delay", 2)
+            for sec in [1, 2, 3, 5, 999]:
+                label = "手动" if sec == 999 else f"{sec} 秒"
+                act = QAction(label, self)
+                act.setCheckable(True)
+                act.setChecked(current_delay == sec)
+                act.triggered.connect(lambda checked, s=sec: self.update_config_delay(s))
+                delay_menu.addAction(act)
+                self.action_group_delay.append(act)
 
         self.tray_menu.addSeparator()
         
-        action_quit = QAction("❌退出程序", self)
+        action_quit = QAction("❌ 退出程序", self)
         action_quit.triggered.connect(self.exit_application)
         self.tray_menu.addAction(action_quit)
         
@@ -311,10 +317,8 @@ class ModernUIWindow(QMainWindow):
     
     def update_ui_layout(self):
         if self.mini_mode:
-            # === 极简模式 (参考你提供的样式) ===
-            self.setFixedSize(150, 100) # 参考样式尺寸
+            self.setFixedSize(150, 100)
             
-            # 设置 Flags：不接受焦点，不激活窗口
             flags = (Qt.WindowType.Tool |
                      Qt.WindowType.FramelessWindowHint |
                      Qt.WindowType.WindowStaysOnTopHint |
@@ -323,21 +327,18 @@ class ModernUIWindow(QMainWindow):
             self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
             self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
             
-            # 样式：15px 圆角
-            self.centralWidget().setStyleSheet("border: 1px solid #1C1C1C; border-radius: 15px; background-color: rgba(0, 0, 0, 0.80);")
+            central = self.centralWidget()
+            if central:
+                central.setStyleSheet("border: 1px solid #1C1C1C; border-radius: 15px; background-color: rgba(0, 0, 0, 0.80);")
             
-            # 隐藏输入框和按钮
             self.recognition_edit.hide()
             self.manual_send_button.hide()
             
-            # 按钮样式初始化 (50x30, 30 icon, 边框)
             self.setup_round_button(self.toggle_button, 50, 30, "#292929", extra_border="border: 2px solid #556070;")
             
         else:
-            # === 完整模式 (恢复原样) ===
             self.setFixedSize(400, 40)
             
-            # 恢复 Flags：允许焦点
             flags = (Qt.WindowType.Tool |
                      Qt.WindowType.FramelessWindowHint |
                      Qt.WindowType.WindowStaysOnTopHint)
@@ -345,13 +346,13 @@ class ModernUIWindow(QMainWindow):
             self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, False)
             self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
             
-            # 样式：8px 圆角
-            self.centralWidget().setStyleSheet("border: 1px solid #1C1C1C; border-radius: 8px; background-color: rgba(0, 0, 0, 0.80);")
+            central = self.centralWidget()
+            if central:
+                central.setStyleSheet("border: 1px solid #1C1C1C; border-radius: 8px; background-color: rgba(0, 0, 0, 0.80);")
             
             self.recognition_edit.show()
             self.manual_send_button.show()
             
-            # 按钮样式恢复
             self.setup_round_button(self.toggle_button, 30, 20, "#292929")
             
         # 刷新状态颜色
@@ -402,14 +403,12 @@ class ModernUIWindow(QMainWindow):
             QTimer.singleShot(200, self.start_worker_service)
 
     def on_vad_group_triggered(self, action):
-        # 直接从 Action 中取回数值，精准无误
         new_factor = action.data()
         if new_factor is None: return
 
-        print(f"切换 VAD 灵敏度因子: {new_factor}")
+        print(f"🎙️ 切换 VAD 灵敏度因子: {new_factor}")
         self.config["vad_sensitivity_factor"] = new_factor
         
-        # 重启服务生效
         if self.worker:
             self.stop_worker_service()
             QTimer.singleShot(200, self.start_worker_service)
@@ -423,18 +422,6 @@ class ModernUIWindow(QMainWindow):
         self.config["language"] = new_lang
         
         # 重启服务以应用新模型参数
-        if self.worker:
-            self.stop_worker_service()
-            QTimer.singleShot(200, self.start_worker_service)
-
-    # === (原来的 VAD 回调，确保有) ===
-    def on_vad_group_triggered(self, action):
-        new_factor = action.data()
-        if new_factor is None: return
-
-        print(f"🎙️ 切换 VAD 灵敏度因子: {new_factor}")
-        self.config["vad_sensitivity_factor"] = new_factor
-        
         if self.worker:
             self.stop_worker_service()
             QTimer.singleShot(200, self.start_worker_service)

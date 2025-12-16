@@ -3,6 +3,8 @@
 
 ASRInput is a fully local speech-to-text solution designed for Windows. It leverages **Voice Activity Detection (VAD)** for smart segmentation and transcribes speech in real-time with a floating UI. This tool is lightweight, efficient, and requires no internet connection.
 
+![](assets/voice-chat_11401399.png)
+
 ---
 
 ## 🚀 Features
@@ -47,19 +49,21 @@ ASRInput is a fully local speech-to-text solution designed for Windows. It lever
 ## 📂 Project Structure  
 ```
 ASRInput/
-├── src/                    
-│   ├── asr_core.py          # Speech recognition core with emotion detection
-│   ├── config.yaml          # User settings and model configuration
-│   ├── main.py              # Application entry point
-│   ├── window.py            # Dual-mode floating UI implementation
-│   ├── worker_thread.py     # Background audio processing with VAD
-├── models/                  # ASR and VAD models (if applicable)
-├── log/                    # Recognition logs
-├── audio-melody-music-38-svgrepo-com.svg  # App icon
-├── ms_mic_active.svg       # Active microphone icon
-├── ms_mic_inactive.svg     # Inactive microphone icon
-├── requirements.txt        # Project dependencies
-└── README.md               # Documentation
+├── src/
+│   ├── asr_core.py          # ASR engine & Emoji processing
+│   ├── config.yaml          # User configuration (Critical)
+│   ├── main.py              # Entry point
+│   ├── window.py            # GUI & Tray implementation
+│   └── worker_thread.py     # Audio capture & VAD logic
+├── models/                  # Local models directory
+│   └── iic/                 # SenseVoiceSmall & FSMN-VAD
+├── log/                     # Runtime logs
+├── assets/                  # (Optional) Icon assets
+│   ├── audio-melody-music-38-svgrepo-com.svg  # App Icon
+│   ├── ms_mic_active.svg        # Active State Icon
+│   ├── ms_mic_inactive.svg      # Inactive State Icon
+├── requirements.txt         # Dependencies
+└── README.md                # Documentation
 ```
 
 ---
@@ -93,9 +97,9 @@ ASRInput/
 
 ## 💻 System Requirements
 - **OS**: Windows 10/11  
-- **Python**: 3.9+  
+- **Python**: 3.9-3.11
 - **Memory**: 4GB RAM minimum
-- **Storage**: 2GB for models
+- **Storage**: 1.02GB for models
 - **Optional**: NVIDIA GPU (Recommended for better performance)  
 
 ### 🔧 Installation
@@ -106,19 +110,36 @@ ASRInput/
    ```
 2. Create a virtual environment:
    ```sh
-   python -m venv venv
-   venv\Scripts\activate  # Windows
+   python -m venv .asrinput
+   .asrinput\Scripts\Activate.ps1
+   python.exe -m pip install --upgrade pip
    ```
-3. Install dependencies:
+3. **Install PyTorch (Select one based on your GPU)**
+   
+   **Option A**: For Modern GPU Support CUDA 12.x(Recommended)
+   ```sh
+   pip install torch torchvision torchaudio --index-url [https://download.pytorch.org/whl/cu124](https://download.pytorch.org/whl/cu124)
+   ```
+   **Option B**: For Older GPUs Support CUDA 11.x
+   ```
+   pip install torch torchvision torchaudio --index-url [https://download.pytorch.org/whl/cu118](https://download.pytorch.org/whl/cu118)
+   ```
+   Option C: CPU Only (No NVIDIA GPU)
+   ```sh
+   pip install torch torchvision torchaudio
+   ```
+
+4. Install dependencies:
    ```sh
    pip install -r requirements.txt
    ```
-4. Download models (first run will auto-download):
+5. Download models (first run will auto-download):
    - ASR Model: SenseVoiceSmall
    - VAD Model: speech_fsmn_vad_zh-cn-16k-common-pytorch
 
 ### ▶️ Run the application
 ```sh
+.asrinput\Scripts\Activate.ps1
 python src/main.py
 ```
 

@@ -6,7 +6,6 @@ import time as _time
 import numpy as np
 from PyQt6.QtCore import QThread, pyqtSignal
 import pyaudio
-import yaml
 import wave
 import logging
 from funasr import AutoModel
@@ -47,8 +46,9 @@ class ASRWorkerThread(QThread):
         self.noise_threshold = self.config.get("noise_threshold", 0.002)
 
         # 创建反馈音频保存目录
-        if self.config.get("model_cache_path"):
-             os.makedirs(self.config.get("model_cache_path"), exist_ok=True)
+        model_cache_path = self.config.get("model_cache_path")
+        if model_cache_path:
+            os.makedirs(model_cache_path, exist_ok=True)
 
         # === 初始化录音流 ===
         self.pa = pyaudio.PyAudio()
@@ -114,7 +114,7 @@ class ASRWorkerThread(QThread):
         # 自动计算需要几个块 (至少 1 个)
         required_silence_count = max(1, int(pause_delay / chunk_sec))
         
-        # === [关键修正 1] 强制设定最小安全缓冲时间 ===
+        # === [关键修正 1] 强制设定最小安全缓冲时间 ==I=
         # 无论配置文件写 2秒 还是 3秒，这里强制至少 6秒 才会触发硬切
         # 这是为了防止 "死循环"（切分->识别卡顿->积压录音->瞬间又满->切分）
         cfg_buffer = self.config.get("buffer_seconds", 6)

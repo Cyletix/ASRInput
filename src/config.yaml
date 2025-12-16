@@ -1,16 +1,29 @@
-model_name: small      # "small" "medium" "large"
-language: zh        # "en" "zh" "jp"
-device: cuda           # 或 "cpu"
-buffer_seconds: 2      # 缓冲时间，单位秒
-step_seconds: 0.5       # 步长，单位秒
-remove_trailing_period: true  # 是否去除句末句号
-trailing_punctuation: " " # 分隔符, 默认"。", 推荐" " 或 "" 或其他字符
-punctuation_mode: "half"  # "full" 或 "half"
-model_cache_path: "models"  # 模型缓存路径
-max_cache_count: 20         # 最大缓存模型数量
-cache_clear_interval: 10  # 缓存清理间隔，单位分钟
-recognize_emoji: false         # 是否识别表情（在后处理中使用）
-recognize_speaker: false      # 是否识别说话人
-accept_feedback: false        # 是否接受反馈
-feedback_path: "feedback" 
-max_sentence_seconds: 4      # 最大句子长度，单位秒
+# === ASR Model Configuration ===
+language: zh
+device: cuda
+sample_rate: 16000
+buffer_seconds: 6      # Optimized for responsiveness
+noise_threshold: 0.002 # Silence threshold
+vad_sensitivity_factor: 0.2  # 新增配置，表示将默认 VAD 阈值乘以 0.2
+disable_update: True
+
+# === Auto-Send Delay ===
+# Time in seconds to wait before auto-typing.
+# If you click the edit box during this time, auto-typing is cancelled.
+auto_send_delay: 3
+
+# === Local Model Paths ===
+# MUST use double backslashes "\\" for Windows paths.
+# If these paths are empty or incorrect, it WILL download from cloud.
+local_asr_path: "models\\iic\\SenseVoiceSmall"
+local_vad_path: "models\\iic\\speech_fsmn_vad_zh-cn-16k-common-pytorch"
+
+
+
+
+# === [您的实测最佳参数] ===
+# 1. 断句等待: 0.8秒 (0.8 / 0.256 ≈ 3次，正是您要的"3次静音")
+vad_pause_delay: 0.8 
+
+# # 2. 灵敏度: 1.4 (抗噪模式，实测效果好)
+# vad_sensitivity_factor: 1.4

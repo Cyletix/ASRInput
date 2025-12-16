@@ -7,9 +7,14 @@ from PyQt6.QtWidgets import (
     QApplication, QSystemTrayIcon, QMenu, QSizePolicy
 )
 from PyQt6.QtCore import Qt, QTimer, QSize, QEvent
-from PyQt6.QtGui import QMouseEvent, QGuiApplication, QIcon, QAction, QFocusEvent, QPixmap, QColor, QFontMetrics
-import keyboard  # 使用 keyboard 库
-from asr_core import emo_set  # 用于提取表情
+from PyQt6.QtGui import QMouseEvent, QGuiApplication, QIcon, QAction, QFocusEvent, QPixmap, QColor, QActionGroup
+import keyboard
+from asr_core import emo_set
+
+# === 图标配置 ===
+ICON_APP = "audio-melody-music-38-svgrepo-com.svg"
+ICON_ACTIVE = "ms_mic_active.svg"
+ICON_INACTIVE = "ms_mic_inactive.svg"
 
 def insert_text_into_active_window(text):
     try:
@@ -17,7 +22,7 @@ def insert_text_into_active_window(text):
     except Exception as e:
         clipboard = QGuiApplication.clipboard()
         clipboard.setText(text)
-        print("keyboard.write 失败，文本已复制到剪贴板，请手动粘贴。", e)
+        print("keyboard.write 失败，文本已复制到剪贴板。", e)
 
 def tint_icon_white(icon, size):
     """
@@ -39,56 +44,277 @@ class ModernUIWindow(QMainWindow):
         self.setWindowTitle("语音识别悬浮窗口")
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.worker = None
-        self.exiting = False  # 退出标志
+        self.exiting = False
+        self.service_running = False  # 服务总开关状态
+        self.mini_mode = False        # 极简模式状态
 
-        # 构建界面（普通模式与反馈模式均采用原有透明圆角风格）
-        if self.config.get("accept_feedback", False):
-            self.setFixedSize(400, 40)
-            flags = (Qt.WindowType.Tool |
-                     Qt.WindowType.FramelessWindowHint |
-                     Qt.WindowType.WindowStaysOnTopHint)
-            self.setWindowFlags(flags)
-            central_widget = QWidget(self)
-            central_widget.setStyleSheet("border: 1px solid #1C1C1C; border-radius: 8px; background-color: rgba(0, 0, 0, 0.80);")
-            layout = QHBoxLayout(central_widget)
-            layout.setContentsMargins(5, 5, 5, 5)
-            self.setCentralWidget(central_widget)
-            
-            self.toggle_button = QPushButton()
-            self.setup_round_button(self.toggle_button, 60, 36, "#292929")
-            # 反馈模式下初始为非激活状态：灰色图标
-            self.set_disabled_state()
-            self.toggle_button.clicked.connect(self.toggle_recognition)
-            self.toggle_button.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-            layout.addWidget(self.toggle_button)
-            
-            self.recognition_edit = QLineEdit()
-            self.recognition_edit.setPlaceholderText("等待识别...")
-            self.recognition_edit.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-            self.recognition_edit.setFixedHeight(25)
-            self.recognition_edit.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-            self.recognition_edit.setStyleSheet("border: 1px solid #292929; border-bottom: 2px solid #7886C7; border-radius: 8px; padding: 0px;")
-            layout.addWidget(self.recognition_edit, stretch=1)
-            # 当输入框获得焦点时暂停识别
-            self.recognition_edit.installEventFilter(self)
-            
-            self.feedback_button = QPushButton("反馈")
-            self.feedback_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-            self.feedback_button.setFixedSize(50, 25)
-            self.feedback_button.setStyleSheet("border: 1px solid #292929; border-radius: 8px; padding: 0px;")
-            self.feedback_button.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-            self.feedback_button.clicked.connect(self.on_feedback_clicked)
-            layout.addWidget(self.feedback_button)
-            
-            self.manual_send_button = QPushButton("Send")
-            self.manual_send_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-            self.manual_send_button.setFixedSize(50, 25)
-            self.manual_send_button.setStyleSheet("border: 1px solid #292929; border-radius: 8px; padding: 0px;")
-            self.manual_send_button.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-            self.manual_send_button.clicked.connect(self.on_manual_send)
-            layout.addWidget(self.manual_send_button)
+        # 默认配置兜底
+        if "auto_send_delay" not in self.config:
+            self.config["auto_send_delay"] = 3
+
+        # === 界面构建 (默认完整模式) ===
+        self.setFixedSize(400, 40)
+        flags = (Qt.WindowType.Tool |
+                 Qt.WindowType.FramelessWindowHint |
+                 Qt.WindowType.WindowStaysOnTopHint)
+        self.setWindowFlags(flags)
+        
+        central_widget = QWidget(self)
+        central_widget.setStyleSheet("border: 1px solid #1C1C1C; border-radius: 8px; background-color: rgba(0, 0, 0, 0.80);")
+        layout = QHBoxLayout(central_widget)
+        layout.setContentsMargins(5, 5, 5, 5)
+        self.setCentralWidget(central_widget)
+        
+        # 1. 麦克风按钮
+        self.toggle_button = QPushButton()
+        self.setup_round_button(self.toggle_button, 30, 20, "#292929")
+        self.toggle_button.clicked.connect(self.toggle_recognition)
+        layout.addWidget(self.toggle_button)
+        
+        # 2. 输入框
+        self.recognition_edit = QLineEdit()
+        self.recognition_edit.setPlaceholderText("等待识别...")
+        self.recognition_edit.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.recognition_edit.setFixedHeight(25)
+        self.recognition_edit.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.recognition_edit.setStyleSheet("border: 1px solid #292929; border-bottom: 2px solid #7886C7; border-radius: 8px; padding: 0px; color: white; background: transparent;")
+        self.recognition_edit.installEventFilter(self)
+        layout.addWidget(self.recognition_edit, stretch=1)
+        
+        # 3. 上屏按钮
+        self.manual_send_button = QPushButton("Send")
+        self.manual_send_button.setFixedSize(50, 25)
+        self.manual_send_button.setStyleSheet("border: 1px solid #292929; border-radius: 8px; color: white; background: #444;")
+        self.manual_send_button.clicked.connect(self.on_manual_send)
+        layout.addWidget(self.manual_send_button)
+
+        # === 状态初始化 ===
+        self.last_recognized_text = ""
+        self.last_audio_id = ""
+        self.last_sent_text = ""
+        self.recognition_active = False
+        
+        self.remove_trailing_period = self.config.get("remove_trailing_period", True)
+        self.trailing_punctuation = self.config.get("trailing_punctuation", " ")
+        self.punctuation_mode = self.config.get("punctuation_mode", "half")
+        
+        # 自动上屏定时器
+        self.auto_send_timer = QTimer(self)
+        self.auto_send_timer.setSingleShot(True)
+        self.auto_send_timer.timeout.connect(self.auto_send)
+        
+        # 日志
+        os.makedirs("log", exist_ok=True)
+        self.log_file_path = f"log/recognition_{time.strftime('%Y%m%d_%H%M%S')}.log"
+        self.log_file = open(self.log_file_path, "a", encoding="utf-8")
+        
+        # 热键
+        try:
+            keyboard.add_hotkey('ctrl+shift+h', lambda: QTimer.singleShot(0, self.toggle_window_visibility))
+            keyboard.add_hotkey('esc', lambda: QTimer.singleShot(100, self.on_esc_pressed))
+        except:
+            print("热键注册失败")
+        
+        # 托盘与位置
+        self.init_tray_icon()
+        self.reposition_window()
+        
+        # 默认启动并设置初始状态
+        self.set_disabled_state()
+        QTimer.singleShot(500, self.start_worker_service)
+
+    def setup_round_button(self, button, btn_size, icon_size, bg_color, extra_border=""):
+        button.setFixedSize(btn_size, btn_size)
+        button.setIconSize(QSize(icon_size, icon_size))
+        radius = btn_size // 2
+        style = f"""
+            QPushButton {{
+                {extra_border}
+                border-radius: {radius}px;
+                background-color: {bg_color};
+                padding: 2px;
+                border: 1px solid transparent;
+            }}
+            QPushButton:hover {{
+                border: 1px solid rgba(255, 255, 255, 0.5);
+            }}
+            QPushButton:pressed {{
+                background-color: black;
+                border: 1px solid rgba(255, 255, 255, 0.3);
+            }}
+        """
+        button.setStyleSheet(style)
+
+    # === 图标状态控制 ===
+    def set_active_state(self):
+        if os.path.exists(ICON_ACTIVE):
+            self.toggle_button.setIcon(QIcon(ICON_ACTIVE))
         else:
-            self.setFixedSize(150, 100)
+            self.toggle_button.setText("🎤")
+        
+        if self.mini_mode:
+            # 极简模式：激活色 #A4C2E9，50x30, 边框保持
+            self.setup_round_button(self.toggle_button, 50, 30, "#A4C2E9", extra_border="border: 2px solid #556070;")
+        else:
+            # 完整模式：激活色 #2196F3，正常大小
+            self.setup_round_button(self.toggle_button, 30, 20, "#A4C2E9")
+
+    def set_disabled_state(self):
+        if os.path.exists(ICON_INACTIVE):
+            self.toggle_button.setIcon(QIcon(ICON_INACTIVE))
+        else:
+            self.toggle_button.setText("⏸")
+        
+        if self.mini_mode:
+            # 极简模式：灰色，50x30, 边框保持
+            self.setup_round_button(self.toggle_button, 50, 30, "#292929", extra_border="border: 2px solid #556070;")
+        else:
+            # 完整模式：灰色，正常大小
+            self.setup_round_button(self.toggle_button, 30, 20, "#292929")
+
+    # === 托盘菜单 ===
+    def init_tray_icon(self):
+        self.tray_icon = QSystemTrayIcon(self)
+        if os.path.exists(ICON_APP):
+            self.tray_icon.setIcon(QIcon(ICON_APP))
+        else:
+            self.tray_icon.setIcon(self.style().standardIcon(QApplication.style().StandardPixmap.SP_MediaPlay))
+            
+        self.tray_menu = QMenu()
+        
+        action_show = QAction("👓显示/隐藏", self)
+        action_show.triggered.connect(self.toggle_window_visibility)
+        self.tray_menu.addAction(action_show)
+
+        # 模式切换
+        self.action_ui_mode = QAction("🔄 切换极简模式", self)
+        self.action_ui_mode.triggered.connect(self.toggle_ui_mode)
+        self.tray_menu.addAction(self.action_ui_mode)
+        
+        self.tray_menu.addSeparator()
+
+        # 服务开关
+        self.action_toggle_service = QAction("✅ 启用服务", self)
+        self.action_toggle_service.setCheckable(True)
+        self.action_toggle_service.setChecked(True)
+        self.action_toggle_service.triggered.connect(self.handle_tray_toggle_service)
+        self.tray_menu.addAction(self.action_toggle_service)
+        
+        self.tray_menu.addSeparator()
+
+        # === [新增] 语言选择菜单 ===
+        lang_menu = self.tray_menu.addMenu("🌐 语言设置")
+        self.lang_action_group = QActionGroup(self)
+        self.lang_action_group.setExclusive(True)
+        
+        # 获取当前语言配置 (默认 zh)
+        current_lang = self.config.get("language", "zh")
+        
+        lang_options = [
+            ("🇨🇳 中文 (zh)", "zh"),
+            ("🇺🇸 英语 (en)", "en"),
+            ("🇯🇵 日语 (ja)", "ja"),
+            ("🇭🇰 粤语 (yue)", "yue"),
+            ("🇰🇷 韩语 (ko)", "ko"),
+            ("🤖 自动 (auto)", "auto")
+        ]
+        
+        for label, code in lang_options:
+            act = QAction(label, self)
+            act.setCheckable(True)
+            act.setData(code) # 存储 "zh", "en" 等代码
+            self.lang_action_group.addAction(act)
+            lang_menu.addAction(act)
+            
+            # 精准打钩
+            if current_lang == code:
+                act.setChecked(True)
+                
+        self.lang_action_group.triggered.connect(self.on_lang_group_triggered)
+
+        # === 缓冲设置 (保持原样) ===
+        buffer_menu = self.tray_menu.addMenu("🔧 缓冲时长")
+        self.action_group_buffer = []
+        current_buf = self.config.get("buffer_seconds", 6)
+        for sec in [2, 4, 6, 8]:
+            act = QAction(f"{sec} 秒", self)
+            act.setCheckable(True)
+            act.setChecked(current_buf == sec)
+            act.triggered.connect(lambda checked, s=sec: self.update_config_buffer(s))
+            buffer_menu.addAction(act)
+            self.action_group_buffer.append(act)
+
+        self.tray_menu.addSeparator()
+
+        # === [修复] VAD 灵敏度 (解决无对勾问题) ===
+        vad_menu = self.tray_menu.addMenu("🎙️ 灵敏度 (VAD)")
+        self.vad_action_group = QActionGroup(self)
+        self.vad_action_group.setExclusive(True)
+        
+        current_vad = self.config.get("vad_sensitivity_factor", 1.0)
+        
+        vad_options = [
+            ("特灵敏 (0.5)", 0.5), 
+            ("较灵敏 (0.8)", 0.8), 
+            ("标准 (1.0)", 1.0), 
+            ("抗噪 (1.4)", 1.4),
+            ("超抗噪 (2.0)", 2.0)
+        ]
+        
+        for label, factor in vad_options:
+            act = QAction(label, self)
+            act.setCheckable(True)
+            act.setData(factor)
+            self.vad_action_group.addAction(act)
+            vad_menu.addAction(act)
+            
+            # [关键修复] 浮点数比较 + 显式打钩
+            if abs(current_vad - factor) < 0.01:
+                act.setChecked(True)
+        
+        # 如果没有任何一个被选中 (例如配置里是旧值)，强制选中“标准”
+        if not self.vad_action_group.checkedAction():
+             for act in self.vad_action_group.actions():
+                 if abs(act.data() - 1.0) < 0.01:
+                     act.setChecked(True)
+                     break
+
+        self.vad_action_group.triggered.connect(self.on_vad_group_triggered)
+
+        # === 延迟设置 (保持原样) ===
+        delay_menu = self.tray_menu.addMenu("⏱️ 自动上屏延迟")
+        self.action_group_delay = []
+        current_delay = self.config.get("auto_send_delay", 3)
+        for sec in [1, 2, 3, 5, 999]:
+            label = "手动" if sec == 999 else f"{sec} 秒"
+            act = QAction(label, self)
+            act.setCheckable(True)
+            act.setChecked(current_delay == sec)
+            act.triggered.connect(lambda checked, s=sec: self.update_config_delay(s))
+            delay_menu.addAction(act)
+            self.action_group_delay.append(act)
+
+        self.tray_menu.addSeparator()
+        
+        action_quit = QAction("退出程序", self)
+        action_quit.triggered.connect(self.exit_application)
+        self.tray_menu.addAction(action_quit)
+        
+        self.tray_icon.setContextMenu(self.tray_menu)
+        self.tray_icon.show()
+        self.tray_icon.activated.connect(lambda r: self.toggle_window_visibility() if r == QSystemTrayIcon.ActivationReason.DoubleClick else None)
+
+    # === [关键修改] 模式切换逻辑 ===
+    def toggle_ui_mode(self):
+        self.mini_mode = not self.mini_mode
+        self.update_ui_layout()
+    
+    def update_ui_layout(self):
+        if self.mini_mode:
+            # === 极简模式 (参考你提供的样式) ===
+            self.setFixedSize(150, 100) # 参考样式尺寸
+            
+            # 设置 Flags：不接受焦点，不激活窗口
             flags = (Qt.WindowType.Tool |
                      Qt.WindowType.FramelessWindowHint |
                      Qt.WindowType.WindowStaysOnTopHint |
@@ -97,476 +323,302 @@ class ModernUIWindow(QMainWindow):
             self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
             self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
             
-            central_widget = QWidget(self)
-            central_widget.setStyleSheet("border: 1px solid #1C1C1C; border-radius: 15px; background-color: rgba(0, 0, 0, 0.80);")
-            layout = QHBoxLayout(central_widget)
-            layout.setContentsMargins(5, 5, 5, 5)
-            self.setCentralWidget(central_widget)
+            # 样式：15px 圆角
+            self.centralWidget().setStyleSheet("border: 1px solid #1C1C1C; border-radius: 15px; background-color: rgba(0, 0, 0, 0.80);")
             
-            self.toggle_button = QPushButton()
-            self.toggle_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            # 隐藏输入框和按钮
+            self.recognition_edit.hide()
+            self.manual_send_button.hide()
+            
+            # 按钮样式初始化 (50x30, 30 icon, 边框)
             self.setup_round_button(self.toggle_button, 50, 30, "#292929", extra_border="border: 2px solid #556070;")
-            self.set_disabled_state()
-            self.toggle_button.clicked.connect(self.toggle_recognition)
-            self.toggle_button.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-            layout.addWidget(self.toggle_button)
-            self.show()
-        
-        self.last_recognized_text = ""
-        self.last_audio_id = ""
-        self.last_sent_text = ""
-        
-        self.remove_trailing_period = self.config.get("remove_trailing_period", True)
-        self.trailing_punctuation = self.config.get("trailing_punctuation", " ")  # 默认使用空格分隔
-        self.punctuation_mode = self.config.get("punctuation_mode", "half")
-        
-        self.auto_send_timer = QTimer(self)
-        self.auto_send_timer.setSingleShot(True)
-        self.auto_send_timer.timeout.connect(self.auto_send)
-        
-        self.recognition_active = False
-        
-        os.makedirs("log", exist_ok=True)
-        self.log_file_path = f"log/recognition_{time.strftime('%Y%m%d_%H%M%S')}.log"
-        self.log_file = open(self.log_file_path, "a", encoding="utf-8")
-        
-        from worker_thread import ASRWorkerThread
-        self.worker = None
-        
-        keyboard.add_hotkey('shift+alt+h', self.toggle_recognition)
-        # 修改 ESC 热键：按 ESC 隐藏窗口并暂停识别（不退出程序）
-        keyboard.add_hotkey('esc', lambda: QTimer.singleShot(100, self.on_esc_pressed))
-        
-        self.init_tray_icon()
-        self.reposition_window()
-
-    # 统一状态切换方法（保持原样）
-    def set_active_state(self):
-        self.toggle_button.setIcon(QIcon("ms_mic_active.svg"))
-        btn_size = self.toggle_button.width() if self.toggle_button.width() > 0 else 60
-        radius = btn_size // 2
-        style = f"border-radius: {radius}px; background-color: #A4C2E9; padding: 4px;"
-        self.toggle_button.setStyleSheet(style)
-
-    def set_disabled_state(self):
-        self.toggle_button.setIcon(QIcon("ms_mic_inactive.svg"))
-        btn_size = self.toggle_button.width() if self.toggle_button.width() > 0 else 60
-        radius = btn_size // 2
-        style = f"border-radius: {radius}px; background-color: #292929; padding: 4px;"
-        self.toggle_button.setStyleSheet(style)
-
-    def update_toggle_icon(self, active: bool):
-        if active:
+            
+        else:
+            # === 完整模式 (恢复原样) ===
+            self.setFixedSize(400, 40)
+            
+            # 恢复 Flags：允许焦点
+            flags = (Qt.WindowType.Tool |
+                     Qt.WindowType.FramelessWindowHint |
+                     Qt.WindowType.WindowStaysOnTopHint)
+            self.setWindowFlags(flags)
+            self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, False)
+            self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+            
+            # 样式：8px 圆角
+            self.centralWidget().setStyleSheet("border: 1px solid #1C1C1C; border-radius: 8px; background-color: rgba(0, 0, 0, 0.80);")
+            
+            self.recognition_edit.show()
+            self.manual_send_button.show()
+            
+            # 按钮样式恢复
+            self.setup_round_button(self.toggle_button, 30, 20, "#292929")
+            
+        # 刷新状态颜色
+        if self.worker and not self.worker.paused:
             self.set_active_state()
         else:
             self.set_disabled_state()
-
-    def eventFilter(self, obj, event):
-        if obj == self.recognition_edit and event.type() == QEvent.Type.FocusIn:
-            if self.worker and not self.worker.paused:
-                self.worker.pause()
-                self.set_disabled_state()
-                print("输入框获得焦点，暂停自动识别")
-        return super().eventFilter(obj, event)
-
-    def reposition_window(self):
-        screen = QGuiApplication.primaryScreen()
-        if screen:
-            geom = screen.availableGeometry()
-            x = geom.x() + (geom.width() - self.width()) // 2
-            y = geom.y() + geom.height() - self.height()
-            self.move(x, y)
-
-    def event(self, e: QEvent):
-        if e.type() in (QEvent.Type.WindowActivate, QEvent.Type.FocusIn) and not self.config.get("accept_feedback", False):
-            return True
-        return super().event(e)
-
-    def focusInEvent(self, event: QFocusEvent):
-        if not self.config.get("accept_feedback", False):
-            self.clearFocus()
-            event.ignore()
-        else:
-            super().focusInEvent(event)
-
-    def focusOutEvent(self, event: QFocusEvent):
-        # 当窗口失去焦点时暂停识别
-        if self.worker and not self.worker.paused:
-            self.worker.pause()
-            self.set_disabled_state()
-            print("窗口失去焦点，识别已暂停")
-        super().focusOutEvent(event)
-
-    def focusNextPrevChild(self, next: bool) -> bool:
-        if not self.config.get("accept_feedback", False):
-            return False
-        return super().focusNextPrevChild(next)
-
-    def setup_round_button(self, button, btn_size, icon_size, bg_color, extra_border=""):
-        button.setFixedSize(btn_size, btn_size)
-        button.setIconSize(QSize(icon_size, icon_size))
-        radius = btn_size // 2
-        style = f"{extra_border} border-radius: {radius}px; background-color: {bg_color}; padding: 4px;"
-        button.setStyleSheet(style)
-
-    def update_ui_mode(self):
-        if self.recognition_active and self.worker is not None:
-            self.worker.pause()
-            self.recognition_active = False
-            self.set_disabled_state()
-        old_widget = self.centralWidget()
-        if old_widget:
-            old_widget.deleteLater()
-        
-        if self.config.get("accept_feedback", False):
-            self.setFixedSize(400, 40)
-            self.setWindowFlags(Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint)
-            self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, False)
-            central_widget = QWidget(self)
-            central_widget.setStyleSheet("border: 1px solid #1C1C1C; border-radius: 15px; background-color: rgba(0, 0, 0, 0.80);")
-            layout = QHBoxLayout(central_widget)
-            layout.setContentsMargins(5, 5, 5, 5)
-            self.setCentralWidget(central_widget)
             
-            self.toggle_button = QPushButton()
-            self.toggle_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-            self.setup_round_button(self.toggle_button, 30, 18, "#292929")
-            self.set_disabled_state()  # 反馈模式下初始化同样为非激活状态
-            self.toggle_button.clicked.connect(self.toggle_recognition)
-            layout.addWidget(self.toggle_button)
-            
-            self.recognition_edit = QLineEdit()
-            self.recognition_edit.setPlaceholderText("等待识别...")
-            self.recognition_edit.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-            self.recognition_edit.setFixedHeight(25)
-            self.recognition_edit.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-            self.recognition_edit.setStyleSheet("border: 1px solid #292929; border-bottom: 2px solid #A4C2E9; border-radius: 8px;")
-            layout.addWidget(self.recognition_edit, stretch=1)
-            
-            self.feedback_button = QPushButton("反馈")
-            self.feedback_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-            self.feedback_button.setFixedSize(50, 25)
-            self.feedback_button.setStyleSheet("border: 1px solid #292929; border-radius: 8px;")
-            self.feedback_button.clicked.connect(self.on_feedback_clicked)
-            layout.addWidget(self.feedback_button)
-            
-            self.manual_send_button = QPushButton("Send")
-            self.manual_send_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-            self.manual_send_button.setFixedSize(50, 25)
-            self.manual_send_button.setStyleSheet("border: 1px solid #292929; border-radius: 8px;")
-            self.manual_send_button.clicked.connect(self.on_manual_send)
-            layout.addWidget(self.manual_send_button)
-        else:
-            self.setFixedSize(150, 100)
-            self.setWindowFlags(Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.WindowDoesNotAcceptFocus)
-            self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
-            self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-            central_widget = QWidget(self)
-            central_widget.setStyleSheet("border: 1px solid #1C1C1C; border-radius: 15px; background-color: rgba(0, 0, 0, 0.80);")
-            layout = QHBoxLayout(central_widget)
-            layout.setContentsMargins(5, 5, 5, 5)
-            self.setCentralWidget(central_widget)
-            
-            self.toggle_button = QPushButton()
-            self.toggle_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-            self.setup_round_button(self.toggle_button, 50, 30, "#292929", extra_border="border: 2px solid #556070;")
-            self.set_disabled_state()
-            self.toggle_button.clicked.connect(self.toggle_recognition)
-            layout.addWidget(self.toggle_button)
-            self.show()
+        # 必须调用 show 才能应用新的 Flags
+        self.show()
         self.reposition_window()
 
-    def update_feedback_ui(self):
-        """根据反馈文本内容自动调整窗口宽度"""
-        if self.config.get("accept_feedback", False):
-            fm = self.recognition_edit.fontMetrics()
-            text = self.recognition_edit.text()
-            new_width = fm.horizontalAdvance(text) + 30  # 加上左右边距
-            min_width = 400
-            if new_width < min_width:
-                new_width = min_width
-            self.setFixedWidth(new_width)
-            self.reposition_window()
+    # === 配置更新 ===
+    def update_config_buffer(self, seconds):
+        self.config["buffer_seconds"] = seconds
+        for act in self.action_group_buffer: act.setChecked(int(act.text().split()[0]) == seconds)
+        if self.worker:
+            self.stop_worker_service()
+            self.start_worker_service()
 
-    def closeEvent(self, event):
-        if self.exiting:
-            if self.recognition_active and self.worker is not None:
-                self.worker.stop()
-                self.worker.wait()
-            self.log_file.close()
-            event.accept()
-        else:
-            self.hide()
-            event.ignore()
-            
-    def mousePressEvent(self, event: QMouseEvent):
-        if event.button() == Qt.MouseButton.LeftButton:
-            self._startPos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
-            event.accept()
-            
-    def mouseMoveEvent(self, event: QMouseEvent):
-        if hasattr(self, '_startPos') and self._startPos is not None and event.buttons() == Qt.MouseButton.LeftButton:
-            self.move(event.globalPosition().toPoint() - self._startPos)
-            event.accept()
-            
-    def mouseReleaseEvent(self, event: QMouseEvent):
-        self._startPos = None
-        event.accept()
+    def update_config_delay(self, seconds):
+        self.config["auto_send_delay"] = seconds
+        for act in self.action_group_delay: 
+            val = 999 if "手动" in act.text() else int(act.text().split()[0])
+            act.setChecked(val == seconds)
 
-    def init_tray_icon(self):
-        self.tray_icon = QSystemTrayIcon(self)
-        self.tray_icon.setIcon(QIcon("audio-melody-music-38-svgrepo-com.svg"))
-        self.tray_icon.setToolTip("ASRInput by Cyletix")
-        self.tray_menu = QMenu()
+    # window.py - 添加新方法
+    def update_config_vad(self, factor):
+        self.config["vad_sensitivity_factor"] = factor
+        print(f"VAD 灵敏度调整为: {factor}")
         
-        self.action_show = QAction("显示", self)
-        self.action_show.triggered.connect(self.show_window_from_tray)
-        self.tray_menu.addAction(self.action_show)
+        # 更新菜单勾选状态
+        for act in self.vad_action_group.actions():
+            # 提取括号里的数字进行比较，或者根据 text 简单判断
+            # 这里简单做：重置所有，再次根据当前 config 设
+            current_val = self.config["vad_sensitivity_factor"]
+            # 假设 act.text() 格式是 "Label (0.1)"
+            try:
+                val_in_text = float(re.findall(r"\d+\.?\d*", act.text())[-1])
+                act.setChecked(abs(val_in_text - current_val) < 0.01)
+            except:
+                pass
+
+        # 重启服务以应用更改 (因为 VAD 参数是在初始化时传入的)
+        if self.worker:
+            self.stop_worker_service()
+            # 稍微给一点时间让线程释放资源
+            QTimer.singleShot(200, self.start_worker_service)
+
+    def on_vad_group_triggered(self, action):
+        # 直接从 Action 中取回数值，精准无误
+        new_factor = action.data()
+        if new_factor is None: return
+
+        print(f"切换 VAD 灵敏度因子: {new_factor}")
+        self.config["vad_sensitivity_factor"] = new_factor
         
-        self.action_toggle_emoji = QAction("识别表情", self, checkable=True)
-        self.action_toggle_emoji.setChecked(self.config.get("recognize_emoji", False))
-        self.action_toggle_emoji.setToolTip("是否对识别结果进行表情处理")
-        self.action_toggle_emoji.triggered.connect(lambda checked: self.config.update({"recognize_emoji": checked}) or print("识别表情设置:", checked))
-        self.tray_menu.addAction(self.action_toggle_emoji)
+        # 重启服务生效
+        if self.worker:
+            self.stop_worker_service()
+            QTimer.singleShot(200, self.start_worker_service)
+
+    # === 新增语言切换回调 ===
+    def on_lang_group_triggered(self, action):
+        new_lang = action.data()
+        if not new_lang: return
         
-        self.action_toggle_speaker = QAction("识别说话人", self, checkable=True)
-        self.action_toggle_speaker.setChecked(self.config.get("recognize_speaker", False))
-        self.action_toggle_speaker.setToolTip("是否锁定当前说话人")
-        self.action_toggle_speaker.triggered.connect(lambda checked: self.config.update({"recognize_speaker": checked}) or print("识别说话人设置:", checked))
-        self.tray_menu.addAction(self.action_toggle_speaker)
+        print(f"🌐 切换语言模式: {new_lang} ({action.text()})")
+        self.config["language"] = new_lang
         
-        self.action_toggle_feedback = QAction("接受反馈", self, checkable=True)
-        self.action_toggle_feedback.setChecked(self.config.get("accept_feedback", False))
-        self.action_toggle_feedback.setToolTip("启用后记录反馈音频，并切换为反馈模式")
-        self.action_toggle_feedback.triggered.connect(lambda checked: (
-            self.config.update({"accept_feedback": checked}),
-            self.update_ui_mode(),
-            self.show_window_from_tray(),
-            print("接受反馈设置:", checked)
-        ))
-        self.tray_menu.addAction(self.action_toggle_feedback)
+        # 重启服务以应用新模型参数
+        if self.worker:
+            self.stop_worker_service()
+            QTimer.singleShot(200, self.start_worker_service)
+
+    # === (原来的 VAD 回调，确保有) ===
+    def on_vad_group_triggered(self, action):
+        new_factor = action.data()
+        if new_factor is None: return
+
+        print(f"🎙️ 切换 VAD 灵敏度因子: {new_factor}")
+        self.config["vad_sensitivity_factor"] = new_factor
         
-        self.language_menu = QMenu("选择语言", self)
-        for lang in ["zh", "en", "ja"]:
-            action = QAction(lang, self, checkable=True)
-            action.setData(lang)
-            if lang == self.config.get("language", "zh"):
-                action.setChecked(True)
-            action.triggered.connect(lambda checked, a=action: self.set_language(a))
-            self.language_menu.addAction(action)
-        self.tray_menu.addMenu(self.language_menu)
-        
-        self.vad_menu = QMenu("VAD间隔", self)
-        for interval in [256, 512, 1024]:
-            action = QAction(f"{interval} ms", self, checkable=True)
-            action.setData(interval)
-            if interval == self.config.get("vad_interval", 256):
-                action.setChecked(True)
-            action.triggered.connect(lambda checked, a=action: self.set_vad_interval(a))
-            self.vad_menu.addAction(action)
-        self.tray_menu.addMenu(self.vad_menu)
-        
-        self.chunk_menu = QMenu("Chunk大小", self)
-        for c in [512, 1024, 2048]:
-            action = QAction(f"{c}", self, checkable=True)
-            action.setData(c)
-            if c == self.config.get("chunk", 2048):
-                action.setChecked(True)
-            action.triggered.connect(lambda checked, a=action: self.set_chunk(a))
-            self.chunk_menu.addAction(action)
-        self.tray_menu.addMenu(self.chunk_menu)
-        
-        self.action_exit = QAction("退出", self)
-        self.action_exit.triggered.connect(self.exit_application)
-        self.tray_menu.addAction(self.action_exit)
-        
-        self.tray_icon.setContextMenu(self.tray_menu)
-        self.tray_icon.activated.connect(self.on_tray_icon_activated)
-        self.tray_icon.show()
-        
-    def on_tray_icon_activated(self, reason):
-        from PyQt6.QtWidgets import QSystemTrayIcon
-        if reason == QSystemTrayIcon.ActivationReason.DoubleClick:
-            self.show_window_from_tray()
-            
-    def set_language(self, action):
-        lang = action.data()
-        self.config["language"] = lang
-        for act in self.language_menu.actions():
-            act.setChecked(act == action)
-        print("语言设置为:", lang)
-        
-    def set_vad_interval(self, action):
-        interval = action.data()
-        self.config["vad_interval"] = interval
-        if self.worker is not None:
-            self.worker.vad_chunk_ms = interval
-            self.worker.vad_chunk_samples = int(self.worker.sample_rate * interval / 1000)
-        for act in self.vad_menu.actions():
-            act.setChecked(act == action)
-        print("VAD间隔设置为:", interval, "ms")
-        
-    def set_chunk(self, action):
-        chunk_val = action.data()
-        self.config["chunk"] = chunk_val
-        for act in self.chunk_menu.actions():
-            act.setChecked(act == action)
-        print("Chunk 大小设置为:", chunk_val, "（需重启识别服务后生效）")
-        
-    def show_window_from_tray(self):
-        self.show()
-        self.raise_()
-        
-    def process_text(self, text):
-        text = text.strip()
-        if text:
-            text = re.sub(r'[.。]+$', '', text)
-            mode = self.punctuation_mode
-            if mode in ["half", "full"]:
-                text += self.trailing_punctuation
-            elif mode == "space":
-                text += " "
-        return text
-        
-    def toggle_recognition(self):
-        if self.worker is None:
-            self.toggle_button.setEnabled(False)
-            QTimer.singleShot(200, self.start_worker)
+        if self.worker:
+            self.stop_worker_service()
+            QTimer.singleShot(200, self.start_worker_service)
+
+    # === 服务控制逻辑 ===
+    def handle_tray_toggle_service(self):
+        is_on = self.action_toggle_service.isChecked()
+        if is_on:
+            self.start_worker_service()
         else:
-            if hasattr(self.worker, 'paused') and self.worker.paused:
-                self.worker.resume()
-                self.set_active_state()
-                print("识别已恢复")
-            else:
-                self.worker.pause()
-                self.set_disabled_state()
-                print("识别已暂停")
-                
-    def start_worker(self):
+            self.stop_worker_service()
+
+    def start_worker_service(self):
+        if self.worker is not None: return
         from worker_thread import ASRWorkerThread
+
+        # === [修正] 从配置读取采样率和设备 ===
+        # 注意：SenseVoiceSmall 官方训练是 16000。
+        # 如果你改成 44100，录音流会变，但模型可能会识别率下降或报错，
+        # 但既然你要求生效，这里必须读配置。
+        cfg_sample_rate = self.config.get("sample_rate", 16000)
+        cfg_device = self.config.get("device", "cuda")
+
         self.worker = ASRWorkerThread(
-            sample_rate=16000,
+            sample_rate=cfg_sample_rate,
             chunk=self.config.get("chunk", 256),
-            buffer_seconds=self.config.get("buffer_seconds", 2),
-            device=self.config.get("device", "cuda"),
+            buffer_seconds=self.config.get("buffer_seconds", 4),
+            device=cfg_device,
             config=self.config
         )
         self.worker.result_ready.connect(self.on_new_recognition)
         self.worker.initialized.connect(self.on_worker_initialized)
         self.worker.start()
-        self.recognition_active = True
-        print("识别启动中...")
-        
+        self.service_running = True
+        print("识别服务启动中...")
+
+    def stop_worker_service(self):
+        if self.worker:
+            self.worker.stop()
+            self.worker = None
+        self.service_running = False
+        self.recognition_active = False
+        self.set_disabled_state()
+        self.recognition_edit.setPlaceholderText("服务已停止")
+        self.hide()
+
     def on_worker_initialized(self):
-        self.toggle_button.setEnabled(True)
         self.recognition_active = True
+        self.action_toggle_service.setChecked(True)
         self.set_active_state()
-        print("识别已启动")
-        
-    def extract_emojis(self, text):
-        return "".join(ch for ch in text if ch in emo_set)
-        
-    def log_recognition(self, text):
-        record = {
-            "时间": time.strftime("%Y-%m-%d %H:%M:%S"),
-            "语言": self.config.get("language", "zh"),
-            "表情": self.extract_emojis(text),
-            "内容": text
-        }
-        self.log_file.write(json.dumps(record, ensure_ascii=False) + "\n")
-        self.log_file.flush()
-        
+        print("识别服务已就绪")
+
+    def toggle_recognition(self):
+        if self.worker is None:
+            self.start_worker_service()
+        else:
+            if self.worker.paused:
+                self.worker.resume()
+                self.set_active_state()
+            else:
+                self.worker.pause()
+                self.set_disabled_state()
+
+    def resume_recognition_state(self):
+        if self.service_running and self.worker:
+            self.worker.resume()
+            self.set_active_state()
+            print("<<< 恢复识别状态")
+
+    # === 交互与事件 ===
+    def eventFilter(self, obj, event):
+        if obj == self.recognition_edit and event.type() == QEvent.Type.FocusIn:
+            if self.worker and not self.worker.paused:
+                self.worker.pause()
+                self.set_disabled_state()
+                self.auto_send_timer.stop()
+                print(">>> 输入框获得焦点，暂停自动识别")
+        return super().eventFilter(obj, event)
+
+    def focusOutEvent(self, event: QFocusEvent):
+        if self.worker and not self.worker.paused:
+            self.worker.pause()
+            self.set_disabled_state()
+            print(">>> 窗口失去焦点，识别已暂停")
+        super().focusOutEvent(event)
+
     def on_new_recognition(self, recognized_text, audio_id):
-        processed = self.process_text(recognized_text)
+        processed = recognized_text.strip()
         self.last_recognized_text = processed
         self.last_audio_id = audio_id
-        self.log_recognition(processed)
-        if self.config.get("accept_feedback", False):
+        
+        self.log_file.write(f"{time.strftime('%H:%M:%S')} - {processed}\n")
+        self.log_file.flush()
+        
+        # === [关键修改] 极简模式逻辑 ===
+        if self.mini_mode:
+            # 极简模式：没有输入框缓冲，没有延迟，直接上屏
+            insert_text_into_active_window(processed)
+        else:
+            # 完整模式：原有的带缓冲区的逻辑
             if not self.recognition_edit.hasFocus():
                 current = self.recognition_edit.text()
-                # 如果已有文本且末尾不包含预设分隔符，则先补上
-                if current and not current.rstrip().endswith(self.trailing_punctuation):
-                    current += self.trailing_punctuation
-                # 反馈模式下使用 trailing_punctuation 作为唯一分隔符（不使用换行符）
-                new_text = current + processed if current else processed
+                new_text = current + " " + processed if current else processed
                 self.recognition_edit.setText(new_text)
-                self.update_feedback_ui()
-                if self.auto_send_timer.isActive():
-                    self.auto_send_timer.stop()
-                self.auto_send_timer.start(3000)
-        else:
-            insert_text_into_active_window(processed)
-    
-    def focusOutEvent(self, event: QFocusEvent):
-        # 当窗口失去焦点时暂停识别
-        if self.worker and not self.worker.paused:
-            self.worker.pause()
-            self.set_disabled_state()
-            print("窗口失去焦点，识别已暂停")
-        super().focusOutEvent(event)
-            
-    def auto_send(self):
-        if self.recognition_edit and self.recognition_edit.hasFocus():
-            print("自动上屏已取消，因为文本框处于激活状态。")
-            return
-        if self.recognition_edit:
-            current_text = self.recognition_edit.text().strip()
-            if current_text and current_text != self.last_sent_text:
-                insert_text_into_active_window(current_text)
-                self.last_sent_text = current_text
-                self.recognition_edit.clear()
                 
+                delay_sec = self.config.get("auto_send_delay", 3)
+                if delay_sec < 900:
+                    self.auto_send_timer.start(delay_sec * 1000)
+                    print(f"收到内容，{delay_sec}秒后自动上屏...")
+
+    def auto_send(self):
+        if self.recognition_edit.hasFocus(): return
+        current_text = self.recognition_edit.text().strip()
+        if current_text and current_text != self.last_sent_text:
+            insert_text_into_active_window(current_text)
+            self.last_sent_text = current_text
+            self.recognition_edit.clear()
+
     def on_manual_send(self):
+        self.auto_send_timer.stop()
         current_text = self.recognition_edit.text().strip()
         if current_text:
-            if current_text != self.last_sent_text:
-                self.hide()
-                QTimer.singleShot(100, lambda: (insert_text_into_active_window(current_text), self.show()))
-                self.last_sent_text = current_text
-            self.recognition_edit.clear()   # 发送后清空输入框
+            self.hide()
+            QTimer.singleShot(100, lambda: (insert_text_into_active_window(current_text), self.show()))
+            self.last_sent_text = current_text
+            self.recognition_edit.clear()
         else:
-            print("没有文本可上屏。")
-            
-    def on_feedback_clicked(self):
-        if not self.config.get("accept_feedback", False):
-            print("反馈功能已禁用。")
-            return
-        current = self.recognition_edit.text().strip()
-        if not current:
-            print("反馈：没有内容。")
-            return
-        audio_filename = self.worker.save_feedback_audio(self.last_audio_id)
-        feedback = {
-            "audio_filename": audio_filename,
-            "original": self.last_recognized_text,
-            "modified": current
-        }
-        with open("feedback.json", "a", encoding="utf-8") as f:
-            json.dump(feedback, f, ensure_ascii=False)
-            f.write("\n")
-        print("反馈已保存：", feedback)
-        self.recognition_edit.clear()
-        self.last_recognized_text = ""
-        self.last_sent_text = ""
-            
+            self.resume_recognition_state()
+
+    # === 窗口行为 ===
+    def toggle_window_visibility(self):
+        if self.isVisible():
+            self.hide()
+            if self.worker and not self.worker.paused:
+                self.worker.pause()
+                self.set_disabled_state()
+                print(">>> 窗口隐藏，自动暂停")
+        else:
+            self.show()
+            self.activateWindow()
+            if self.worker:
+                self.worker.resume()
+                self.set_active_state()
+                print("<<< 窗口唤醒，自动开始")
+            else:
+                self.start_worker_service()
+
     def on_esc_pressed(self):
-        # 隐藏窗口并暂停识别
         if self.worker and not self.worker.paused:
             self.worker.pause()
             self.set_disabled_state()
-            print("识别已暂停")
         self.hide()
-        print("窗口已隐藏到后台")
 
+    def reposition_window(self):
+        screen = QGuiApplication.primaryScreen()
+        if screen:
+            geom = screen.availableGeometry()
+            # 贴着右下角
+            x = geom.width() - self.width()
+            y = geom.height() - self.height() 
+            self.move(x, y)
+
+    def mousePressEvent(self, event: QMouseEvent):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._startPos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+    def mouseMoveEvent(self, event):
+        if hasattr(self, '_startPos') and self._startPos is not None and event.buttons() == Qt.MouseButton.LeftButton:
+            self.move(event.globalPosition().toPoint() - self._startPos)
+    def mouseReleaseEvent(self, event):
+        self._startPos = None
+
+    def closeEvent(self, event):
+        if self.exiting:
+            if self.worker: self.worker.stop()
+            self.log_file.close()
+            event.accept()
+        else:
+            if self.worker and not self.worker.paused:
+                self.worker.pause()
+                self.set_disabled_state()
+            self.hide()
+            event.ignore()
+            
     def exit_application(self):
         self.exiting = True
-        self.tray_icon.hide()
         self.close()
         QApplication.quit()
-
-if __name__ == "__main__":
-    import sys
-    app = QApplication(sys.argv)
-    window = ModernUIWindow({})
-    window.show()
-    sys.exit(app.exec())

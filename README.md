@@ -10,23 +10,37 @@ ASRInput is a fully local speech-to-text solution designed for Windows. It lever
 - Runs entirely **offline**, ensuring **privacy**.
 - Uses **VAD-based segmentation** for improved transcription accuracy.
 - **Low-latency** processing optimized for real-time input.
+- **Multi-language support**: Chinese, English, Japanese, Cantonese, Korean, and auto-detection.
 
-### 🖥 **Floating UI for Seamless Input**
-- **Non-intrusive overlay window** for easy transcription.
-- Allows **manual text correction** before confirming input.
-- Outputs to the **active application** without switching focus.
+### 🖥 **Dual UI Modes**
+- **Full Mode**: Complete interface with text editing and manual send
+- **Minimal Mode**: Compact floating button for direct speech-to-text
+- **Non-intrusive overlay window** for seamless integration
+- **Transparent background** with rounded corners for modern look
 
 ### ⚡ **Optimized for Performance**
 - **Hardware adaptive** – Works on CPU, but utilizes **GPU acceleration** if available.
 - Efficient **audio buffer management** to maintain **low memory footprint**.
+- **VAD sensitivity tuning** (0.5-2.0) for different noise environments.
 
 ### ⌨ **Global Hotkey Support**
-- **Quick toggle** for enabling/disabling recognition.
+- **Quick toggle** for enabling/disabling recognition (Ctrl+Shift+H).
+- **Hide window** with ESC key.
 - Customizable hotkeys via `config.yaml`.
 
-### 🔧 **Adaptive Model Optimization**
+### 🔧 **Adaptive Configuration**
 - **Remembers corrections** for **personalized** transcription.
 - Supports **custom ASR models** and fine-tuning.
+- **System tray integration** with comprehensive settings menu.
+- **Real-time configuration updates** without restart.
+
+### 🌐 **Language Support**
+- **Chinese (zh)** - Default language
+- **English (en)** - Full support
+- **Japanese (ja)** - Japanese transcription
+- **Cantonese (yue)** - Cantonese dialect
+- **Korean (ko)** - Korean language
+- **Auto-detection** - Automatic language detection
 
 ---
 
@@ -34,18 +48,18 @@ ASRInput is a fully local speech-to-text solution designed for Windows. It lever
 ```
 ASRInput/
 ├── src/                    
-│   ├── asr_core.py          # Speech recognition core
-│   ├── config.py            # Configuration handler
-│   ├── config.yaml          # User settings
+│   ├── asr_core.py          # Speech recognition core with emotion detection
+│   ├── config.yaml          # User settings and model configuration
 │   ├── main.py              # Application entry point
-│   ├── window.py            # Floating UI implementation
-│   ├── worker_thread.py     # Background audio processing thread
-├── models/                  # ASR models (if applicable)
-├── config/                  
-│   └── settings.yaml        # Customizable settings
-├── tests/                   # Unit tests
-├── requirements.txt         # Project dependencies
-└── README.md                # Documentation
+│   ├── window.py            # Dual-mode floating UI implementation
+│   ├── worker_thread.py     # Background audio processing with VAD
+├── models/                  # ASR and VAD models (if applicable)
+├── log/                    # Recognition logs
+├── audio-melody-music-38-svgrepo-com.svg  # App icon
+├── ms_mic_active.svg       # Active microphone icon
+├── ms_mic_inactive.svg     # Inactive microphone icon
+├── requirements.txt        # Project dependencies
+└── README.md               # Documentation
 ```
 
 ---
@@ -53,39 +67,55 @@ ASRInput/
 ## 🎯 How It Works
 1. **Start ASRInput**  
    - Run `python src/main.py`  
-   - The floating input window appears.
+   - The floating input window appears in system tray.
 
-2. **Speak naturally**  
+2. **Choose Mode**  
+   - **Full Mode**: Edit text before sending
+   - **Minimal Mode**: Direct speech-to-text with compact UI
+
+3. **Speak naturally**  
    - ASRInput listens in real-time and transcribes speech.
+   - VAD automatically segments speech based on pauses.
 
-3. **Edit if needed**  
-   - Modify recognized text before confirming.
+4. **Configure on the fly**  
+   - Use system tray menu to adjust:
+     - Language selection
+     - VAD sensitivity
+     - Buffer duration
+     - Auto-send delay
+     - UI mode
 
-4. **Insert text automatically**  
-   - Press confirm, and the text will be **typed into the active window**.
+5. **Insert text automatically**  
+   - Text is automatically typed into active window.
+   - Manual editing available in Full Mode.
 
 ---
 
 ## 💻 System Requirements
-- Windows 10/11  
-- Python 3.9+  
+- **OS**: Windows 10/11  
+- **Python**: 3.9+  
+- **Memory**: 4GB RAM minimum
+- **Storage**: 2GB for models
 - **Optional**: NVIDIA GPU (Recommended for better performance)  
 
 ### 🔧 Installation
 1. Clone the repository:
    ```sh
-   git clone https://github.com/yourusername/ASRInput.git
+   git clone https://github.com/Cyletix/ASRInput.git
    cd ASRInput
    ```
 2. Create a virtual environment:
    ```sh
    python -m venv venv
-   source venv/Scripts/activate  # Windows
+   venv\Scripts\activate  # Windows
    ```
 3. Install dependencies:
    ```sh
    pip install -r requirements.txt
    ```
+4. Download models (first run will auto-download):
+   - ASR Model: SenseVoiceSmall
+   - VAD Model: speech_fsmn_vad_zh-cn-16k-common-pytorch
 
 ### ▶️ Run the application
 ```sh
@@ -95,19 +125,87 @@ python src/main.py
 ---
 
 ## 🛠 Configuration
-Modify `config.yaml` to:
-- Adjust hotkeys
-- Select ASR model
-- Optimize VAD parameters
+Modify `src/config.yaml` to customize:
+
+### Core Settings
+```yaml
+language: zh                    # Language: zh, en, ja, yue, ko, auto
+device: cuda                   # cuda or cpu
+sample_rate: 16000             # Audio sample rate
+buffer_seconds: 6              # Audio buffer duration
+vad_sensitivity_factor: 0.2    # VAD sensitivity (0.5-2.0)
+auto_send_delay: 3             # Auto-send delay in seconds
+```
+
+### Model Paths
+```yaml
+local_asr_path: "models\\iic\\SenseVoiceSmall"
+local_vad_path: "models\\iic\\speech_fsmn_vad_zh-cn-16k-common-pytorch"
+```
+
+### VAD Optimization
+```yaml
+vad_pause_delay: 0.8           # Pause detection delay in seconds
+noise_threshold: 0.002         # Silence threshold
+```
+
+---
+
+## 🎮 Usage Tips
+
+### System Tray Controls
+- **Right-click tray icon** for full settings menu
+- **Double-click tray icon** to show/hide window
+- **Toggle service**: Enable/disable recognition
+- **Switch UI mode**: Full ↔ Minimal
+- **Adjust settings**: Language, sensitivity, buffers
+
+### Hotkeys
+- `Ctrl+Shift+H`: Toggle window visibility
+- `ESC`: Hide window and pause recognition
+- Click microphone button to pause/resume
+
+### Modes
+- **Full Mode**: For editing and manual control
+- **Minimal Mode**: For direct, distraction-free input
+
+---
+
+## 🔄 Recent Updates (v2.0)
+
+### New Features
+- **Dual UI Modes**: Full and Minimal mode switching
+- **Multi-language Support**: 6 language options with auto-detection
+- **VAD Sensitivity Control**: Fine-tune for different environments
+- **Enhanced System Tray**: Complete configuration menu
+- **Improved Audio Processing**: Better VAD segmentation and silence detection
+
+### Technical Improvements
+- Refactored configuration loading and model path resolution
+- Optimized VAD sensitivity settings
+- Enhanced error handling and logging
+- Modern UI with transparent backgrounds and rounded elements
+- Better memory management and garbage collection
+
+### Bug Fixes
+- Fixed audio segmentation logic
+- Resolved UI state synchronization issues
+- Improved focus handling
+- Enhanced model loading reliability
 
 ---
 
 ## 📌 Roadmap
-- ✅ Initial release with **real-time speech input**
+- ✅ Initial release with real-time speech input
+- ✅ Dual UI modes (Full/Minimal)
+- ✅ Multi-language support
+- ✅ VAD sensitivity tuning
 - ⏳ Future improvements:
-  - 🔹 Custom **language models**
-  - 🔹 Advanced **noise filtering**
-  - 🔹 Multi-language support
+  - 🔹 Custom language models
+  - 🔹 Advanced noise filtering
+  - 🔹 Export/import configurations
+  - 🔹 Plugin system for custom actions
+  - 🔹 Cross-platform support (Linux/macOS)
 
 ---
 
@@ -116,38 +214,30 @@ This project is licensed under the **MIT License**.
 
 ---
 
-Now, ASRInput is ready for use! 🚀 Let me know if you need refinements.
+## 🐛 Troubleshooting
 
+### Common Issues
+1. **No audio input**: Check microphone permissions and device selection
+2. **High CPU usage**: Reduce buffer size or switch to GPU
+3. **Model download failures**: Check internet connection or set local paths
+4. **UI not responding**: Restart application or check system resources
 
-## 项目进度
-- [ ] 不转移焦点(多次失败, 重点)
-- [ ] 非激活状态下,svg请使用白色线条, 与背景的黑色区分(失败)
-- [x] vad分割问题, 错误断句
-- [ ] 高性能部分使用C++重构
-- [ ] 打包为exe
-- [ ] 移植到安卓端
+### Logs
+- Recognition logs are saved in `log/` directory
+- Check logs for detailed error information
+- Enable debug mode in config for more verbose logging
 
 ---
 
-## VAD逻辑
+## 🤝 Contributing
+Contributions are welcome! Please feel free to submit a Pull Request.
 
-### 音频缓冲与 VAD 分割
+1. Fork the repository
+2. Create your feature branch (`git checkout -b feature/AmazingFeature`)
+3. Commit your changes (`git commit -m 'Add some AmazingFeature'`)
+4. Push to the branch (`git push origin feature/AmazingFeature`)
+5. Open a Pull Request
 
-程序持续从麦克风读取音频数据，并将数据追加到预先分配好的环形缓冲区中。
-每次从缓冲区中取出一段固定长度（由 VAD 模型控制的采样点数）的音频数据，传递给 VAD 模型进行检测，获取语音活动段的起始和结束时间。
+---
 
-### 正常分割：基于 VAD 检测
-
-如果 VAD 模型检测到一段有效的语音片段（存在一定的静音段或语音结束），则将该段音频提取出来进行 ASR 识别，并触发输出。
-
-
-### 强制分割：超时输出
-
-为避免连续说话时没有足够静音导致语音段过长（例如超过设定的最大句子时长 max_sentence_seconds，比如 8 秒或你配置的值），需要引入“超时强制分割”逻辑。
-当开始累积一个语音段时，记录一个起始时间（segment_start_time）。
-在后续处理中，每次检查当前累积的时间，如果超过 max_sentence_seconds，则强制输出当前缓冲区中已累积的音频数据，并清空缓冲区，这样就能保证一句话不会超过预设时间而影响后续输出。
-这种机制同时也能防止长时间没说话而导致缓冲区数据无限增长。
-缓存清理
-
-另外，针对已识别但暂存于 recognized_audio 中的音频数据，保持一个最大缓存数量，超过时删除最旧的数据。
-定期调用垃圾回收（gc.collect()），以及使用 tracemalloc 输出内存分配快照，方便排查内存问题。
+Now, ASRInput is ready for use! 🚀 Let me know if you need refinements.

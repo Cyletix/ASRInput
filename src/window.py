@@ -296,7 +296,7 @@ class ModernUIWindow(QMainWindow):
 
         self.tray_menu.addSeparator()
         
-        action_quit = QAction("退出程序", self)
+        action_quit = QAction("❌退出程序", self)
         action_quit.triggered.connect(self.exit_application)
         self.tray_menu.addAction(action_quit)
         
